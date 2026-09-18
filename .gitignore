@@ -8,3 +8,5 @@ dist-electron/
 *.bin
 *.dmg
 *.ipa
+__pycache__/
+*.pyc
