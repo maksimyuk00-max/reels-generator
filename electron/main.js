@@ -1002,7 +1002,7 @@ ipcMain.handle('python:androidStatus',  (_, serial) =>
 )
 ipcMain.handle('python:androidPost', async (_, videoPath, caption, serial, dryRun, proxy, expectedUsername) => {
   serial = await ensureFreshSerial(serial)
-  return runAdbOp(serial, pyFetch('/android/post', {
+  return runAdbOp(serial, () => pyFetch('/android/post', {
     method: 'POST',
     body: {
       video_path: videoPath, caption, serial: serial || null,
@@ -1014,7 +1014,7 @@ ipcMain.handle('python:androidPost', async (_, videoPath, caption, serial, dryRu
 })
 ipcMain.handle('python:androidPostV2', async (_, videoPath, caption, serial, dryRun, proxy, expectedUsername) => {
   serial = await ensureFreshSerial(serial)
-  return runAdbOp(serial, pyFetch('/android/post-v2', {
+  return runAdbOp(serial, () => pyFetch('/android/post-v2', {
     method: 'POST',
     body: {
       video_path: videoPath, caption, serial: serial || null,
@@ -1118,7 +1118,7 @@ ipcMain.handle('python:androidScrollReels', async (_, serial, durationSeconds, l
   let result
   try {
     if (engine === 'v2') {
-      result = await runAdbOp(serial, pyFetch('/android/warmup-v2', {
+      result = await runAdbOp(serial, () => pyFetch('/android/warmup-v2', {
         method: 'POST',
         body: {
           serial: serial || null,
@@ -1135,7 +1135,7 @@ ipcMain.handle('python:androidScrollReels', async (_, serial, durationSeconds, l
     } else {
       // v1 (з AI + niche) АБО manual (без AI)
       const useAi = engine === 'v1'
-      result = await runAdbOp(serial, pyFetch('/android/scroll-reels', {
+      result = await runAdbOp(serial, () => pyFetch('/android/scroll-reels', {
         method: 'POST',
         body: {
           serial: serial || null,
@@ -1375,7 +1375,7 @@ async function runScheduler() {
           continue
         }
         console.log(`[Scheduler] ${ctype} #${post.id} — ${imagePaths.length} images`)
-        result = await runAdbOp(serial, pyFetch('/android/post-carousel', {
+        result = await runAdbOp(serial, () => pyFetch('/android/post-carousel', {
           method: 'POST',
           body: {
             image_paths: imagePaths,
@@ -1391,7 +1391,7 @@ async function runScheduler() {
         }))
       } else {
         // Reel — існуючий flow
-        result = await runAdbOp(serial, pyFetch('/android/post-v2', {
+        result = await runAdbOp(serial, () => pyFetch('/android/post-v2', {
           method: 'POST',
           body: {
             video_path: post.video_path,
@@ -1613,7 +1613,7 @@ async function runWarmupScheduler() {
 
     if (engine === 'v2') {
       console.log(`[Warmup] #${session.id} engine=v2, niche=${niche.description ? 'configured' : 'NONE'}`)
-      result = await runAdbOp(serial, pyFetch('/android/warmup-v2', {
+      result = await runAdbOp(serial, () => pyFetch('/android/warmup-v2', {
         method: 'POST',
         body: {
           serial: serial,
@@ -1635,7 +1635,7 @@ async function runWarmupScheduler() {
       // v1 (з AI) або manual (без AI) — обидва через scroll-reels
       const useAi = engine === 'v1'
       console.log(`[Warmup] #${session.id} engine=${engine}, AI=${useAi}`)
-      result = await runAdbOp(serial, pyFetch('/android/scroll-reels', {
+      result = await runAdbOp(serial, () => pyFetch('/android/scroll-reels', {
         method: 'POST',
         body: {
           serial: serial,
@@ -1861,7 +1861,7 @@ async function _runThreadsSession(session) {
     }
 
     const durationSec = durationMin * 60
-    result = await runAdbOp(actualSerial, pyFetch('/threads/scroll-comment', {
+    result = await runAdbOp(actualSerial, () => pyFetch('/threads/scroll-comment', {
       method: 'POST',
       body: {
         serial: actualSerial,
@@ -1966,34 +1966,61 @@ async function ensureFreshSerial(serial) {
 // Обгортка для android операцій — оновлює wifi status тільки на основі реальних викликів.
 // Замість background ping: під час операції = busy, успіх = connected, ADB fail = lost.
 const ADB_ERROR_RE = /(adb|connection refused|offline|not found|unreachable|timeout|host is down|wifi|tcp|cannot connect)/i
-async function runAdbOp(serial, opPromise) {
-  if (serial) setWifiState(serial, { status: 'busy', lastError: null })
-  try {
-    const r = await opPromise
-    if (serial) {
-      if (r?.ok) {
-        setWifiState(serial, { status: 'connected', method: 'op-success', lastError: null })
-      } else if (r?.error && ADB_ERROR_RE.test(String(r.error))) {
-        setWifiState(serial, { status: 'lost', lastError: String(r.error) })
-      } else {
-        // Не-ADB помилка (наприклад UI element не знайдено) — пристрій живий
-        setWifiState(serial, { status: 'connected', method: 'op-success', lastError: null })
-      }
-    }
-    return r
-  } catch (e) {
-    const msg = String(e?.message || e)
-    if (serial) {
-      if (ADB_ERROR_RE.test(msg)) {
-        setWifiState(serial, { status: 'lost', lastError: msg })
-      } else {
-        setWifiState(serial, { status: 'connected' })
-      }
-    }
-    throw e
-  }
+
+// Per-device mutex: одна ADB-операція на пристрій одночасно.
+// Пост-планувальник, прогрів-планувальник, Threads і кнопки UI стають у чергу,
+// а не лізуть на телефон паралельно (баг 2026-09-18: два post-v2 одночасно
+// пушили один файл → size mismatch remote=0).
+// Приймаємо opFactory (() => pyFetch(...)), бо pyFetch виконується при виклику —
+// так HTTP-запит піде тільки коли дійде черга, а не при створенні аргументу.
+const deviceOpQueues = {}                     // serial -> Promise (хвіст черги)
+const DEVICE_OP_TIMEOUT_MS = 25 * 60 * 1000   // 25 хв: довший warmup + буфер
+
+function runAdbOpSerial(serial, opFactory) {
+  const key = serial || '__default__'
+  const prev = deviceOpQueues[key] || Promise.resolve()
+  // Чекаємо попередню операцію; запит стартує ТІЛЬКИ коли дійде черга.
+  const started = prev.catch(() => {}).then(() => opFactory())
+  // Завислу операцію зрізаємо таймаутом, щоб не блокувати чергу назавжди.
+  let timer
+  const withTimeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`device op queue timeout (${key})`)), DEVICE_OP_TIMEOUT_MS)
+    started.then(resolve, reject)
+  }).finally(() => clearTimeout(timer))
+  // Черга живе далі незалежно від результату цієї операції.
+  deviceOpQueues[key] = started.catch(() => {})
+  return withTimeout
 }
 
+async function runAdbOp(serial, opFactory) {
+  return runAdbOpSerial(serial, async () => {
+    if (serial) setWifiState(serial, { status: 'busy', lastError: null })
+    try {
+      const r = await opFactory()
+      if (serial) {
+        if (r?.ok) {
+          setWifiState(serial, { status: 'connected', method: 'op-success', lastError: null })
+        } else if (r?.error && ADB_ERROR_RE.test(String(r.error))) {
+          setWifiState(serial, { status: 'lost', lastError: String(r.error) })
+        } else {
+          // Не-ADB помилка (наприклад UI element не знайдено) — пристрій живий
+          setWifiState(serial, { status: 'connected', method: 'op-success', lastError: null })
+        }
+      }
+      return r
+    } catch (e) {
+      const msg = String(e?.message || e)
+      if (serial) {
+        if (ADB_ERROR_RE.test(msg)) {
+          setWifiState(serial, { status: 'lost', lastError: msg })
+        } else {
+          setWifiState(serial, { status: 'connected' })
+        }
+      }
+      throw e
+    }
+  })
+}
 async function wifiHeartbeat({ serial, notify = false, fullRecovery = false } = {}) {
   // Якщо serial не вказаний — fallback на warmupSchedule.serial (legacy)
   if (!serial) {

@@ -19,6 +19,7 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -240,8 +241,47 @@ def _find_gallery_item_by_index(d, idx: int):
     return None
 
 
+def _wait_mediascanner_indexed(d, remote_name: str, timeout_s: int = 15) -> bool:
+    """Чекати поки MediaStore проіндексує пушнутий файл.
+
+    Broadcast MEDIA_SCANNER_SCAN_FILE на Android 10+ асинхронний і часто
+    губиться — IG-галерея тоді не бачить файл, і пост береться "останній
+    з галереї". Тут ми РЕАЛЬНО чекаємо появи файлу в MediaStore і ретраїмо
+    скан, поки не з'явиться.
+
+    Returns: True якщо файл проіндексовано.
+    """
+    q = ("content query --uri content://media/external/video/media "
+         f"--projection _display_name --where \"_display_name='{remote_name}'\"")
+    deadline = time.time() + timeout_s
+    scanned = False
+    while time.time() < deadline:
+        try:
+            out = d.shell(q).output
+            if remote_name in out:
+                print(f"[post-v2] MediaStore indexed: {remote_name}", flush=True)
+                return True
+        except Exception:
+            pass
+        if not scanned:
+            try:
+                d.shell(f'am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE '
+                        f'-d file://{REMOTE_DIR}/{remote_name}')
+            except Exception:
+                pass
+            scanned = True
+        time.sleep(2)
+    print(f"[post-v2] WARNING: {remote_name} NOT indexed in {timeout_s}s — "
+          f"галерея може показати не той файл", flush=True)
+    return False
+
+
 def _push_video_verified(d, local_path: str, post_id: str | int | None = None) -> dict:
-    """Push відео на телефон з verify розміру.
+    """Push відео на телефон з verify розміру + retry ×3.
+
+    Кожна спроба пушить в УНІКАЛЬНИЙ шлях (attempt-суфікс), щоб паралельний
+    запуск / залишковий файл від минулої невдалої спроби не дав false-mismatch.
+    Retry рятують від WiFi-мігнень посеред передачі 16МБ файлу.
 
     Returns: {"ok": bool, "remote_path": str, "error"?: str}
     """
@@ -253,38 +293,71 @@ def _push_video_verified(d, local_path: str, post_id: str | int | None = None) -
     # Унікальний суфікс щоб уникнути колізій
     suffix = f"_{post_id}" if post_id else f"_{int(time.time())}"
     stem, ext = os.path.splitext(filename)
-    remote_name = f"{stem}{suffix}{ext}"
-    remote_path = f"{REMOTE_DIR}/{remote_name}"
 
-    try:
-        d.shell(f"mkdir -p {REMOTE_DIR}")
-        d.push(local_path, remote_path)
-    except Exception as e:
-        return {"ok": False, "error": f"push failed: {e}"}
+    # БЕЗПЕЧНЕ ІМ'Я НА ТЕЛЕФОНІ: пробіли/великі літери в імені ламають
+    # media scanner на Android 10+ (intent з пробілами в URI мовчки ігнорується,
+    # файл не потрапляє в галерею → пост береться "останній з галереї").
+    # Санітизуємо: малі літери, пробіли → _, лише [a-z0-9._-].
+    import re as _re
+    safe_stem = _re.sub(r'[^a-zA-Z0-9._-]', '_', stem).lower()
+    remote_stem = f"{safe_stem}{suffix}"
 
-    # Verify розмір
-    try:
-        result = d.shell(f"stat -c %s {remote_path}").output.strip()
-        remote_size = int(result) if result.isdigit() else 0
-    except Exception:
-        remote_size = 0
+    last_err = None
+    for attempt in range(1, 4):  # 3 спроби
+        if attempt == 1:
+            remote_name = f"{remote_stem}{ext}"
+        else:
+            remote_name = f"{remote_stem}_try{attempt}{ext}"
+        remote_path = f"{REMOTE_DIR}/{remote_name}"
 
-    if remote_size != local_size:
-        # Cleanup невдалого push
-        try: d.shell(f"rm {remote_path}")
+        try:
+            d.shell(f"mkdir -p {REMOTE_DIR}")
+            # Прибираємо можливий залишок від минулої невдалої спроби
+            try: d.shell(f'rm -f "{remote_path}"')
+            except Exception: pass
+            d.push(local_path, remote_path)
+        except Exception as e:
+            last_err = f"push failed (attempt {attempt}): {e}"
+            print(f"[post-v2] {last_err}", flush=True)
+            time.sleep(3)
+            continue
+
+        # Verify розмір (2 читання підряд — stat теж може глітнути по WiFi)
+        remote_size = None
+        for _ in range(2):
+            try:
+                result = d.shell(f'stat -c %s "{remote_path}"').output.strip()
+                if result.isdigit():
+                    remote_size = int(result)
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        if remote_size is None:
+            remote_size = 0
+
+        if remote_size == local_size:
+            # Media scanner — чекаємо РЕАЛЬНОЇ індексації в MediaStore (до 15с).
+            # Якщо файл НЕ проіндексовано — краще чесно впасти, ніж постити
+            # чужий відео з галереї ("останній item").
+            if not _wait_mediascanner_indexed(d, remote_name):
+                last_err = (f"media scanner не проіндексував {remote_name} за 15с — "
+                            f"скасовано щоб не опублікувати не той файл")
+                print(f"[post-v2] {last_err}", flush=True)
+                try: d.shell(f'rm -f "{remote_path}"')
+                except Exception: pass
+                time.sleep(2)
+                continue
+            return {"ok": True, "remote_path": remote_path, "remote_name": remote_name}
+
+        # Cleanup невдалого push і наступна спроба
+        last_err = f"size mismatch: local={local_size}, remote={remote_size} (attempt {attempt})"
+        print(f"[post-v2] {last_err} — retrying", flush=True)
+        try: d.shell(f'rm -f "{remote_path}"')
         except Exception: pass
-        return {"ok": False,
-                "error": f"size mismatch: local={local_size}, remote={remote_size}"}
+        time.sleep(3)
 
-    # Media scanner — щоб галерея побачила файл
-    try:
-        d.shell(f'am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE '
-                f'-d file://{remote_path}')
-    except Exception:
-        pass
-
-    time.sleep(2)  # час на індексацію галереї
-    return {"ok": True, "remote_path": remote_path, "remote_name": remote_name}
+    return {"ok": False, "error": f"[push_video] {last_err}"}
 
 
 def _cleanup_remote(d, remote_path: str) -> None:
@@ -557,6 +630,25 @@ def post_reel_v2(
             d.shell("input keyevent KEYCODE_HOME")  # go to launcher before cold-launch IG
             time.sleep(0.6)
         except Exception: pass
+
+        # WiFi ADB не дає "plugged" стану — stay_on_while_plugged_in не рятує,
+        # screen timeout (60s) гасить екран посеред публікації. Тримаємо екран
+        # живим: періодичний wake у фоновому потоці до кінця сесії.
+        screen_keepalive_stop = threading.Event()
+
+        def _screen_keepalive():
+            while not screen_keepalive_stop.wait(20):
+                try:
+                    d.shell("input keyevent KEYCODE_WAKEUP")
+                    d.shell("svc power stayon true")
+                    # Жорстко: swipe-lock теж знімаємо (PIN-замок все одно не подолати)
+                    d.shell("wm dismiss-keyguard")
+                except Exception:
+                    pass
+
+        keepalive_t = threading.Thread(target=_screen_keepalive, daemon=True)
+        keepalive_t.start()
+        log("screen keepalive started (25s tick)")
 
         try:
             d.app_stop(IG_PKG)
@@ -915,6 +1007,9 @@ def post_reel_v2(
                                   f"[{current_step}] {result['error']}", log)
         return result
     finally:
+        # Зупиняємо screen keepalive
+        try: screen_keepalive_stop.set()
+        except Exception: pass
         # Revert disguise/proxy
         if orig_disguise is not None:
             try:
