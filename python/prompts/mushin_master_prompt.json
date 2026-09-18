@@ -1,0 +1,171 @@
+{
+  "meta": {
+    "account": "mushinjournal",
+    "style_name": "Cinematic Samurai Philosophy",
+    "description": "Hyper-realistic cinematic AI-generated images of Japanese warriors — samurai in full armor or unarmored ronin — set against dramatic atmospheric landscapes. Aesthetic blends ancient warrior culture with modern motivational content.",
+    "aspect_ratio": "9:16",
+    "resolution": "1080x1920"
+  },
+
+  "visual_style": {
+    "overall": "Ultra-realistic cinematic photography, NOT illustration or painting. Looks like a movie still from a high-budget samurai epic (Ghost of Tsushima / 47 Ronin aesthetic). Hyper-detailed textures, film grain, shallow depth of field.",
+    "color_grade": "Dark, desaturated base with selective color accents. Cold steel blues and charcoal blacks dominate. Selective warm pops: deep crimson, burnt orange, golden amber. NO bright or neon colors.",
+    "contrast": "High contrast. Deep crushed blacks, bright specular highlights on metal surfaces. HDR-like but cinematic.",
+    "mood": "Stoic, heavy, ancient, inevitable. No happiness or softness. Pure silent strength and discipline."
+  },
+
+  "characters": {
+    "type_A_armored_samurai": {
+      "frequency": "65% of images",
+      "description": "Full samurai in complete yoroi armor with kabuto helmet",
+      "armor_details": [
+        "Heavily weathered and battle-worn lacquered plates",
+        "Scratches, dents, rain droplets on metal surfaces",
+        "Lacing (odoshi) visible between armor plates",
+        "Shoulder guards (osode) prominent",
+        "Prominent kuwagata (antler-like horns) on helmet",
+        "Mengu (demon/oni face mask) on most helmets — fierce expression"
+      ],
+      "armor_colors": [
+        "Primary: Matte black / dark charcoal (most common, 50%)",
+        "Secondary: Deep red and black combination (30%)",
+        "Rare: Dark steel blue (10%), weathered grey (10%)"
+      ],
+      "weapons": "Katana — either sheathed at hip, held at side, or raised. Occasionally yumi (bow)."
+    },
+    "type_B_unarmored_ronin": {
+      "frequency": "30% of images",
+      "description": "Japanese male warrior in dark robes without armor",
+      "appearance": [
+        "East Asian male, approximately 35-45 years old",
+        "Strong angular jaw, defined cheekbones, intense dark eyes",
+        "Long dark hair — either tied back in loose topknot or flowing wet in wind",
+        "Several days of stubble or short beard",
+        "Face weathered, determined, scars possible",
+        "Expression: stoic, cold, focused — never smiling"
+      ],
+      "clothing": [
+        "Dark grey or black kimono / hakama",
+        "Layered dark robes, worn and rough-textured",
+        "Fabric moves in wind, sometimes wet from rain"
+      ],
+      "weapons": "Katana at hip or held loosely at side"
+    },
+    "type_C_silhouette": {
+      "frequency": "5% of images",
+      "description": "Lone warrior as pure silhouette against dramatic sky",
+      "details": "Full body silhouette, often from behind, wearing kasa (conical straw hat) and holding katana. Background is explosive orange/gold sunset or fire."
+    }
+  },
+
+  "camera_angles": {
+    "extreme_closeup": {
+      "frequency": "30%",
+      "description": "Face of helmet/mask filling 70%+ of frame. Extreme detail on metal texture, scratches, rain drops. Eyes visible through visor — burning with intensity."
+    },
+    "medium_portrait": {
+      "frequency": "35%",
+      "description": "Chest-to-head shot. Warrior facing camera directly or slight 3/4 angle. Background blurred (bokeh). Low camera angle looking slightly upward."
+    },
+    "full_body_low_angle": {
+      "frequency": "15%",
+      "description": "Full body from ground level. Warrior appears monumental, towering against dramatic sky. Often on horseback."
+    },
+    "from_behind": {
+      "frequency": "15%",
+      "description": "Warrior seen from behind, facing vast landscape. Conveys solitude and purpose. Horizon visible ahead of them."
+    },
+    "profile_side": {
+      "frequency": "5%",
+      "description": "Clean profile view. Warrior looking into distance. Dramatic rim lighting separates them from background."
+    }
+  },
+
+  "backgrounds": {
+    "foggy_grey_plains": {
+      "frequency": "35%",
+      "description": "Misty overcast landscape. Low hanging fog. Barren ground. Bokeh lights in far distance (campfires, lanterns). Cold desaturated tones."
+    },
+    "golden_wheat_fields": {
+      "frequency": "15%",
+      "description": "Tall golden-amber grass field. Warm backlight (sunset/sunrise). Grasses blowing in wind. Cinematic orange glow."
+    },
+    "rain_storm": {
+      "frequency": "15%",
+      "description": "Heavy rain visible as diagonal streaks. Wet surfaces with reflections. Dark storm clouds. Bokeh light points in background."
+    },
+    "crimson_flower_field": {
+      "frequency": "10%",
+      "description": "Field of bright red poppies or cosmos flowers. Strong contrast with dark warrior. Occasionally pink cherry blossoms. Sometimes combined with misty grey sky."
+    },
+    "snowy_mountains": {
+      "frequency": "10%",
+      "description": "Snowfall. White peaks in background. Warrior dusted with snow. Cold blue-white palette."
+    },
+    "fire_and_embers": {
+      "frequency": "10%",
+      "description": "Burning battlefield. Orange fire light from behind. Floating embers. Smoke. Apocalyptic orange sky."
+    },
+    "sunset_silhouette": {
+      "frequency": "5%",
+      "description": "Explosive orange/gold sunset. Pure silhouette of warrior. Dramatic cloud formations."
+    }
+  },
+
+  "lighting": {
+    "primary": "Overcast diffused light — gives even cinematic look",
+    "rim_light": "Strong rim/backlight separating subject from background — creates heroic glow around armor edges",
+    "dramatic_contrast": "Faces and armor in deep shadow with bright highlights on raised surfaces",
+    "rain_reflections": "Wet surfaces catch and reflect light sources for texture depth",
+    "golden_hour": "When used — explosive warm backlighting, subject silhouetted or front-lit with warm orange"
+  },
+
+  "atmosphere": {
+    "weather": ["Heavy rain (most common)", "Dense fog/mist", "Falling snow", "Strong wind", "Clear but overcast"],
+    "time_of_day": ["Dawn (40%)", "Dusk/sunset (35%)", "Overcast midday (25%)"],
+    "feeling": "Ancient. Final. Inevitable. The silence before battle. Total commitment. No escape, no retreat."
+  },
+
+  "prompt_templates": {
+    "armored_closeup": "Ultra-realistic cinematic close-up portrait of a Japanese samurai warrior, full black lacquered yoroi armor with oni demon mengu face mask, worn and battle-scarred metal with rain droplets, intense eyes visible through visor, heavy fog background with bokeh light points, cold desaturated palette, dramatic rim lighting, film grain, shallow depth of field, 9:16 portrait, photorealistic movie still",
+
+    "armored_medium": "Ultra-realistic cinematic portrait of Japanese samurai in full red and black yoroi battle armor with kuwagata horns, chest-up framing, low camera angle, misty grey overcast background, rain falling, weathered armor with scratches and dents, stoic powerful presence, dramatic side lighting, cinematic color grade, film grain, 9:16 vertical format",
+
+    "ronin_portrait": "Ultra-realistic cinematic portrait of Japanese ronin warrior, East Asian male 40s, strong jaw, long dark wet hair tied back, wearing black worn kimono and hakama, katana at side, intense cold eyes, rain falling, bokeh background lights, dark charcoal tones, dramatic rim lighting, film grain, shallow depth of field, 9:16 portrait",
+
+    "full_body_landscape": "Ultra-realistic cinematic full body shot of Japanese samurai warrior in full black armor, low angle looking up, standing in golden wheat field at sunset with explosive orange backlight, wind blowing grass, silhouette rim light, cinematic HDR color grade, epic scale, 9:16 vertical",
+
+    "from_behind_landscape": "Ultra-realistic cinematic shot of lone Japanese samurai from behind, full black armor, standing at cliff edge overlooking vast misty valley, dawn light, fog below, katana at hip, solitary figure against dramatic sky, cinematic color grade, 9:16 portrait",
+
+    "silhouette_sunset": "Ultra-realistic cinematic silhouette of Japanese warrior wearing kasa conical straw hat, full body side profile, standing in field of red poppies, explosive golden orange sunset sky behind, katana visible, dramatic clouds, high contrast, 9:16 vertical"
+  },
+
+  "universal_quality_tags": [
+    "ultra-realistic",
+    "cinematic",
+    "photorealistic",
+    "8K",
+    "film grain",
+    "shallow depth of field",
+    "anamorphic lens",
+    "movie still",
+    "dramatic lighting",
+    "professional color grade",
+    "NOT illustration",
+    "NOT anime",
+    "NOT cartoon"
+  ],
+
+  "negative_prompts": [
+    "anime, cartoon, illustration, painting, drawing",
+    "bright colors, neon, oversaturated",
+    "smiling, happy expression",
+    "modern clothing or equipment",
+    "text, watermark, logo",
+    "blurry, low quality, noise",
+    "deformed hands, extra fingers",
+    "western medieval armor"
+  ],
+
+  "claude_generation_instruction": "You are generating image prompts for mushinjournal Instagram style. Choose ONE character type based on frequency (armored samurai 65%, unarmored ronin 30%, silhouette 5%), ONE camera angle, ONE background. Combine into a single detailed prompt with quality tags. Output only the prompt in English, 2-4 sentences. Vary each generation: armor color, weather detail, specific lighting direction, battle damage details, specific flora species, cloud formations. Never repeat the same combination twice."
+}

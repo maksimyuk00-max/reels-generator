@@ -1,0 +1,156 @@
+# UI DUMP: profile_own
+Time: 20260417-123619
+Current app: {'package': 'com.instagram.android', 'activity': '.activity.MainTabActivity', 'pid': 30220}
+
+## resourceId (131 total, IG only)
+  action_bar_layout
+  action_bar_root
+  action_bar_title
+  action_bar_username_buttons_container
+  action_bar_username_container
+  activity_and_camera_shared_views_main_container
+  bloks_container
+  bottom_sheet_camera_container
+  button_container
+  camera_pano_image_view
+  chaining_button_image
+  clips_tab
+  contact_import_card_circular_icon
+  contact_import_card_circular_icon_container
+  contact_import_card_container
+  contact_import_card_cta
+  contact_import_card_subtitle
+  contact_import_card_title
+  contact_import_dismiss_button
+  container
+  coordinator_root_layout
+  direct_tab
+  dismiss_button
+  edit_name_and_bio_description
+  empty_state_headline_component
+  empty_state_view_root
+  feed_tab
+  footer_space
+  igds_empty_state_body_text
+  igds_empty_state_tertiary_text
+  igds_empty_state_title
+  layout_container_center_right_coordinator_layout
+  layout_container_main
+  layout_container_main_panel
+  layout_container_main_wrapper
+  layout_container_right
+  layout_container_swipeable
+  left_action_bar_buttons
+  modal_container
+  netego_carousel_cta
+  overlay_layout_container
+  pog_bubble_text
+  pog_bubble_text_container
+  pog_note_bubble_card_view
+  pog_note_bubble_container
+  pog_note_bubble_root_view
+  pog_note_bubble_view
+  profile_action_bar
+  profile_header_actions_top_row
+  profile_header_avatar_container_top_left_stub
+  profile_header_container
+  profile_header_familiar_followers_label
+  profile_header_familiar_followers_value
+  profile_header_familiar_following_label
+  profile_header_familiar_following_value
+  profile_header_familiar_post_count_label
+  profile_header_familiar_post_count_value
+  profile_header_fixed_list
+  profile_header_followers_stacked_familiar
+  profile_header_following_stacked_familiar
+  profile_header_full_name_above_vanity
+  profile_header_metrics_full_width
+  profile_header_name_and_bio_upsell
+  profile_header_post_count_front_familiar
+  profile_tab
+  profile_tab_icon_view
+  profile_tab_layout
+  profile_tabs_bottom_divider
+  profile_tabs_container
+  profile_viewpager
+  right_action_bar_buttons
+  row_profile_header
+  row_profile_header_button_chaining
+  row_profile_header_imageview_frame_layout
+  search_tab
+  similar_accounts_carousel_header
+  similar_accounts_carousel_recycler_view
+  similar_accounts_carousel_title
+  similar_accounts_container
+  suggested_entity_card_container
+  suggested_entity_card_context
+  suggested_entity_card_image
+  suggested_entity_card_image_frame
+  suggested_entity_card_name
+  suggested_entity_card_social_context_container
+  suggested_entity_card_top_frame
+  suggested_user_card_follow_button
+  swipe_navigation_container
+  swipe_refresh_animated_progressbar_container
+  swipe_refresh_animated_progressbar_container_background
+  swipeable_nav_view_pager_inner_recycler_view
+  swipeable_tab_view_pager
+  tab_appbar
+  tab_avatar
+  tab_bar
+  tab_bar_shadow
+  tab_icon
+  user_detail_fragment
+  wrapper
+
+## texts (23)
+  '0'
+  '10:30'
+  '55'
+  'Add your bio'
+  'Ask friends anything...'
+  'Connect'
+  'Connect contacts'
+  'Create your first post'
+  'Edit profile'
+  'Find people that you know'
+  'Follow'
+  'Follow some accounts to get started'
+  'Followed by stoic_ism666'
+  'Garry Lasterman'
+  'Give this space some love.'
+  'Jordan Ally'
+  'Naina'
+  'See All'
+  'Share profile'
+  'followers'
+  'friends'
+  'garrylasterman'
+  'posts'
+
+## content-desc (25)
+  '0followers'
+  '0friends'
+  'Aeroplane mode.'
+  'App vault notification: '
+  'Back'
+  'Battery 55 percent.'
+  'Create new'
+  'Discover people'
+  'Dismiss'
+  'Edit profile'
+  'Follow Jordan Ally'
+  'Follow Naina'
+  'Grid View'
+  'Home'
+  'Message'
+  'Options'
+  'Overview'
+  'Photos of You'
+  'Profile'
+  'Reels'
+  'Search and explore'
+  'Share profile'
+  'View profile on Threads'
+  'Wifi signal full.'
+  'garrylasterman'

@@ -1,0 +1,963 @@
+import { useState, useEffect, useRef } from 'react'
+import './Pages.css'
+
+const isElectron = typeof window !== 'undefined' && !!window.api
+
+const PYTHON_PORT = 8765
+
+const IMAGE_PROVIDERS = [
+  { value: 'flow', label: '🌊 Google Flow (автоматично)' },
+  { value: 'google', label: '⭐ Google Gemini 2.0 (Imagen)' },
+  { value: 'stability', label: 'Stability AI' },
+  { value: 'openai', label: 'OpenAI DALL-E 3' },
+  { value: 'replicate', label: 'Replicate (Flux)' },
+]
+
+const VIDEO_PROVIDERS = [
+  { value: 'nhungoc_veo3', label: '🔥 VEO 3 (Nhungoc - безлімітний)' },
+  { value: 'veo', label: '⭐ Google Veo 3 (AI Studio)' },
+  { value: 'kling', label: 'Kling AI' },
+  { value: 'runway', label: 'Runway ML' },
+  { value: 'luma', label: 'Luma Dream Machine' },
+]
+
+// Степи: config → prompt → image → video → compose → done
+const STEPS = ['config', 'prompt', 'image', 'video', 'compose', 'done']
+
+export default function VideoGenerator() {
+  const [step, setStep] = useState('config')
+
+  // Форма
+  const [style, setStyle] = useState('Самурай')
+  const [quote, setQuote] = useState('Той, хто перемагає себе — сильніший за того, хто завойовує міста.')
+  const [prompt, setPrompt] = useState('')
+  const [musicPath, setMusicPath] = useState('')
+  const [logoPath, setLogoPath] = useState('')
+  const [imageProvider, setImageProvider] = useState('google')
+  const [videoProvider, setVideoProvider] = useState('kling')
+  const [promptProvider, setPromptProvider] = useState('claude_cli') // 'claude_cli' | 'gemini'
+
+  // Шаблони
+  const [styles, setStyles] = useState([])
+  const [variants, setVariants] = useState([])
+  const [variantIndex, setVariantIndex] = useState(-1) // -1 = випадковий
+  const currentVariant = variantIndex >= 0 ? variants[variantIndex] : null
+
+  // Результати
+  const [imagePath, setImagePath] = useState(null)
+  const [imageUrl, setImageUrl] = useState(null)
+  const [videoPath, setVideoPath] = useState(null)
+  const [videoUrl, setVideoUrl] = useState(null)
+  const [claudeVideoPrompt, setClaudeVideoPrompt] = useState('')
+  const [claudeVideoPromptText, setClaudeVideoPromptText] = useState('') // assembled text for generator
+  const [generatedImagePrompt, setGeneratedImagePrompt] = useState('')   // JSON for UI display
+  const [generatedImagePromptText, setGeneratedImagePromptText] = useState('') // assembled text for generator
+  const [generatedQuote, setGeneratedQuote] = useState('')
+  const [slowMotion, setSlowMotion] = useState(false)
+  const [finalPath, setFinalPath] = useState(null)
+  const [finalUrl, setFinalUrl] = useState(null)
+
+  // Compose editor
+  const [overlayOpacity, setOverlayOpacity] = useState(0.3)
+  const [trimStart, setTrimStart] = useState(0)
+  const [trimEnd, setTrimEnd] = useState(0)
+  const [videoDuration, setVideoDuration] = useState(0)
+  const composeVideoRef = useRef(null)
+  const composeAudioRef = useRef(null)
+
+  // Стани
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [settings, setSettings] = useState(null)
+
+  // Публікація
+  const [publishCaption, setPublishCaption] = useState('')
+  const [publishing, setPublishing] = useState(false)
+  const [publishResult, setPublishResult] = useState(null) // { ok, url, error }
+  const [scheduleMode, setScheduleMode] = useState(false)
+  const [scheduleDate, setScheduleDate] = useState('')
+  const [scheduleTime, setScheduleTime] = useState('')
+  const [scheduling, setScheduling] = useState(false)
+  const [scheduleResult, setScheduleResult] = useState(null)
+
+  useEffect(() => {
+    if (isElectron) {
+      window.api.settings.get().then(s => {
+        if (!s) return
+        setSettings(s)
+        if (s.imageApi?.provider) setImageProvider(s.imageApi.provider)
+        if (s.videoApi?.provider) setVideoProvider(s.videoApi.provider)
+        if (s.logoPath) setLogoPath(s.logoPath)
+      })
+      window.api.python.getPrompts().then(data => {
+        if (data?.styles) {
+          const styleNames = Object.keys(data.styles)
+          setStyles(styleNames)
+          if (styleNames.length > 0) {
+            setStyle(styleNames[0])
+            setVariants(data.styles[styleNames[0]]?.variants || [])
+          }
+        }
+      })
+    }
+  }, [])
+
+  const onStyleChange = (s) => {
+    setStyle(s)
+    if (isElectron) {
+      window.api.python.getPrompts().then(data => {
+        setVariants(data?.styles?.[s]?.variants || [])
+        setVariantIndex(-1)
+      })
+    }
+  }
+
+  // Крок 0.5 → Генерація промпту
+  const handleGeneratePrompt = async () => {
+    setError('')
+    setLoading(true)
+    setStep('prompt')
+
+    try {
+      const promptResult = await window.api.python.generatePrompt({
+        style: style || 'Hokan',
+      })
+      if (!promptResult?.ok || !promptResult?.prompt) {
+        setError(promptResult?.error || 'Не вдалось згенерувати промпт')
+        setStep('config')
+        setLoading(false)
+        return
+      }
+      // Розбиваємо на 2 поля: image_prompt → поле картинки, video_prompt → поле відео
+      setGeneratedImagePrompt(promptResult.prompt)
+      setGeneratedImagePromptText(promptResult.prompt_text || '')
+      setClaudeVideoPrompt(promptResult.video_prompt || '')
+      setClaudeVideoPromptText(promptResult.video_prompt_text || '')
+      setGeneratedQuote(promptResult.quote || '')
+    } catch (e) {
+      setError(String(e))
+      setStep('config')
+    }
+    setLoading(false)
+  }
+
+  // Крок 1 → Генерація зображення
+  const handleGenerateImage = async () => {
+    setError('')
+    setLoading(true)
+    setStep('image')
+    setImagePath(null)
+    setImageUrl(null)
+
+    try {
+      // Google Flow — окремий шлях
+      if (imageProvider === 'flow') {
+        let flowPrompt = generatedImagePrompt || generatedImagePromptText
+        if (!flowPrompt) {
+          setError('Спочатку згенеруйте промпт')
+          setStep('prompt')
+          setLoading(false)
+          return
+        }
+        const result = await window.api.python.generateFlow({
+          prompt: flowPrompt,
+          cookies: '',
+          project_url: settings?.googleFlow?.projectUrl || '',
+        })
+        if (result.ok) {
+          const filename = result.filename
+          setImagePath(result.path)
+          setImageUrl(`http://127.0.0.1:${PYTHON_PORT}/files/${filename}`)
+        } else {
+          setError(result.error || 'Помилка Google Flow')
+          setStep('config')
+        }
+        setLoading(false)
+        return
+      }
+
+      const apiKey = settings?.imageApi?.apiKey
+      if (!apiKey) {
+        setError('API ключ для зображень не вказано в Налаштуваннях')
+        setLoading(false)
+        return
+      }
+
+      const claudeKey = settings?.claudeApi?.apiKey || ''
+      const geminiKey = settings?.imageApi?.provider === 'google' ? (settings?.imageApi?.apiKey || '') : ''
+      const result = await window.api.python.generateImage({
+        prompt: generatedImagePromptText || generatedImagePrompt || prompt,
+        style,
+        provider: imageProvider,
+        api_key: apiKey,
+        variant_index: variantIndex,
+        claude_api_key: claudeKey,
+        gemini_api_key: geminiKey,
+      })
+
+      if (result.ok) {
+        const filename = result.path.split(/[/\\]/).pop()
+        setImagePath(result.path)
+        setImageUrl(`http://127.0.0.1:${PYTHON_PORT}/files/${filename}`)
+      } else {
+        setError(result.error || 'Помилка генерації зображення')
+        setStep('config')
+      }
+    } catch (e) {
+      setError(String(e))
+      setStep('config')
+    }
+    setLoading(false)
+  }
+
+  // Крок 2 → Генерація відео
+  const handleGenerateVideo = async () => {
+    setError('')
+    setLoading(true)
+    setStep('video')
+    setVideoPath(null)
+    setVideoUrl(null)
+
+    try {
+      const apiKey = settings?.videoApi?.apiKey
+      if (videoProvider !== 'nhungoc_veo3' && !apiKey) {
+        setError('API ключ для відео не вказано в Налаштуваннях')
+        setLoading(false)
+        return
+      }
+
+      // Use video_prompt: Claude-generated > variant > fallback
+      let activeVariant = currentVariant
+      if (!activeVariant && variants.length > 0) {
+        activeVariant = variants[Math.floor(Math.random() * variants.length)]
+      }
+      const videoPrompt = claudeVideoPrompt || claudeVideoPromptText
+        || activeVariant?.video_prompt
+        || `A continuous single unbroken shot with constant unchanging dim overcast lighting throughout the entire video. The camera slowly pushes in toward the warrior. Rain falls at steady pace. The warrior slowly turns his head toward camera. No flashes no bright light no fire no god rays at any point. Same flat grey light from start to finish.`
+
+      const result = await window.api.python.generateVideo({
+        image_path: imagePath,
+        prompt: videoPrompt,
+        provider: videoProvider,
+        api_key: apiKey || '',
+      })
+
+      if (result.ok) {
+        const filename = result.path.split(/[/\\]/).pop()
+        setVideoPath(result.path)
+        setVideoUrl(`http://127.0.0.1:${PYTHON_PORT}/files/${filename}`)
+      } else {
+        setError(result.error || 'Помилка генерації відео')
+        setStep('video')
+      }
+    } catch (e) {
+      setError(String(e))
+      setStep('video')
+    }
+    setLoading(false)
+  }
+
+  // Крок 3 → Compose
+  const handleCompose = () => {
+    // Відкриваємо compose editor (без запуску FFmpeg)
+    setError('')
+    setStep('compose')
+  }
+
+  const handleRenderFinal = async () => {
+    setError('')
+    setLoading(true)
+
+    try {
+      const result = await window.api.python.generateCompose({
+        video_path: videoPath,
+        quote: generatedQuote || quote,
+        music_path: musicPath || null,
+        logo_path: logoPath || null,
+        slow_motion: slowMotion,
+        overlay_opacity: overlayOpacity,
+        trim_start: trimStart,
+        trim_end: trimEnd > 0.5 ? trimEnd : 0,
+      })
+
+      if (result.ok) {
+        const filename = result.path.split(/[/\\]/).pop()
+        setFinalPath(result.path)
+        setFinalUrl(`http://127.0.0.1:${PYTHON_PORT}/files/${filename}`)
+        setStep('done')
+      } else {
+        setError(result.error || 'Помилка compose')
+      }
+    } catch (e) {
+      setError(String(e))
+    }
+    setLoading(false)
+  }
+
+  const handleDownloadFlowLatest = async () => {
+    setLoading(true)
+    setError(null)
+    setStep('image')
+    setImagePath(null); setImageUrl(null)
+    try {
+      const result = await window.api.python.downloadFlowLatest({
+        project_url: settings?.googleFlow?.projectUrl || '',
+      })
+      if (result?.ok) {
+        setImagePath(result.path)
+        setImageUrl(`http://127.0.0.1:${PYTHON_PORT}/files/${result.filename}`)
+      } else {
+        setError(result?.error || 'Не вдалось скачати з Flow')
+        setStep('config')
+      }
+    } catch (e) {
+      setError(String(e))
+      setStep('config')
+    }
+    setLoading(false)
+  }
+
+  const handleUploadImage = async () => {
+    if (!isElectron) return
+    const path = await window.api.dialog.openFile({
+      title: 'Оберіть зображення з Google Flow',
+      filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    })
+    if (!path) return
+    setLoading(true)
+    setStep('image')
+    setImagePath(null); setImageUrl(null)
+    try {
+      const result = await window.api.python.importImage(path)
+      if (result.ok) {
+        setImagePath(result.path)
+        setImageUrl(`http://127.0.0.1:${PYTHON_PORT}/files/${result.filename}`)
+      } else {
+        setError(result.error || 'Помилка імпорту')
+        setStep('config')
+      }
+    } catch (e) {
+      setError(String(e))
+      setStep('config')
+    }
+    setLoading(false)
+  }
+
+  const handlePickMusic = async () => {
+    if (!isElectron) return
+    let audioDir
+    try { audioDir = await window.api.getTempAudioDir() } catch (_) {}
+    const path = await window.api.dialog.openFile({
+      title: 'Оберіть музичний файл',
+      defaultPath: audioDir,
+      filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'aac', 'm4a'] }],
+    })
+    if (path) setMusicPath(path)
+  }
+
+  const handleReset = () => {
+    setStep('config')
+    setImagePath(null); setImageUrl(null)
+    setVideoPath(null); setVideoUrl(null)
+    setFinalPath(null); setFinalUrl(null)
+    setError('')
+    setPublishResult(null); setScheduleResult(null)
+    setPublishCaption(''); setScheduleMode(false)
+  }
+
+  const handlePublishNow = async () => {
+    if (!finalPath) return
+    setPublishing(true)
+    setPublishResult(null)
+    try {
+      const result = await window.api.python.publishReel(finalPath, publishCaption)
+      setPublishResult(result)
+    } catch (e) {
+      setPublishResult({ ok: false, error: String(e) })
+    }
+    setPublishing(false)
+  }
+
+  const handleSchedule = async () => {
+    if (!finalPath || !scheduleDate || !scheduleTime) return
+    setScheduling(true)
+    setScheduleResult(null)
+    try {
+      const when = `${scheduleDate}T${scheduleTime}:00`
+      await window.api.schedule.add(finalPath, publishCaption, when)
+      setScheduleResult({ ok: true, when })
+      setScheduleMode(false)
+    } catch (e) {
+      setScheduleResult({ ok: false, error: String(e) })
+    }
+    setScheduling(false)
+  }
+
+  // Встановлюємо дефолтний час планування (+1 година)
+  const openScheduleMode = () => {
+    const now = new Date(Date.now() + 60 * 60 * 1000)
+    setScheduleDate(now.toISOString().split('T')[0])
+    setScheduleTime(now.toTimeString().slice(0, 5))
+    setScheduleMode(true)
+  }
+
+  const handleOpenFile = () => {
+    if (finalPath && isElectron) window.api.shell.openExternal(`file://${finalPath}`)
+  }
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <h1 className="page-title">⚡ Генератор відео</h1>
+        {step !== 'config' && (
+          <button className="btn-ghost" onClick={handleReset}>← Спочатку</button>
+        )}
+      </div>
+
+      {/* Степер */}
+      <div className="stepper">
+        {[
+          { key: 'config', label: '1. Налаштування' },
+          { key: 'prompt', label: '2. Промт' },
+          { key: 'image', label: '3. Зображення' },
+          { key: 'video', label: '4. Відео' },
+          { key: 'compose', label: '5. Фінал' },
+        ].map((s, i) => {
+          const currentIdx = STEPS.indexOf(step)
+          const stepIdx = STEPS.indexOf(s.key)
+          const isDone = currentIdx > stepIdx
+          const isActive = s.key === step || (step === 'done' && s.key === 'compose')
+          return (
+            <div key={s.key} className={`stepper-item ${isActive ? 'stepper-item--active' : ''} ${isDone ? 'stepper-item--done' : ''}`}>
+              <div className="stepper-dot">{isDone ? '✓' : i + 1}</div>
+              <span>{s.label}</span>
+            </div>
+          )
+        })}
+      </div>
+
+      {error && (
+        <div className="gen-error">❌ {error}</div>
+      )}
+
+      {/* ===== КРОК 1: Конфіг ===== */}
+      {step === 'config' && (
+        <div className="gen-config">
+          <div className="gen-form">
+
+            <div className="form-section">
+              <label className="form-label">Стиль</label>
+              <div className="style-chips">
+                {(styles.length > 0 ? styles : ['Hokan']).map(s => (
+                  <button
+                    key={s}
+                    className={`style-chip ${style === s ? 'style-chip--active' : ''}`}
+                    onClick={() => onStyleChange(s)}
+                  >{s}</button>
+                ))}
+              </div>
+            </div>
+
+            {variants.length > 0 && (
+              <div className="form-section">
+                <label className="form-label">Варіант промпту</label>
+                <div className="variant-chips">
+                  <button
+                    className={`variant-chip ${variantIndex === -1 ? 'variant-chip--active' : ''}`}
+                    onClick={() => setVariantIndex(-1)}
+                  >🎲 Випадковий</button>
+                  {variants.map((v, i) => (
+                    <button
+                      key={i}
+                      className={`variant-chip ${variantIndex === i ? 'variant-chip--active' : ''}`}
+                      onClick={() => setVariantIndex(i)}
+                    >{v.name}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 12 }}>
+              <div className="form-section" style={{ flex: 1 }}>
+                <label className="form-label">Image API</label>
+                <select className="form-select" value={imageProvider} onChange={e => setImageProvider(e.target.value)}>
+                  {IMAGE_PROVIDERS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+              </div>
+              <div className="form-section" style={{ flex: 1 }}>
+                <label className="form-label">Video API</label>
+                <select className="form-select" value={videoProvider} onChange={e => setVideoProvider(e.target.value)}>
+                  {VIDEO_PROVIDERS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12 }}>
+              <div className="form-section" style={{ flex: 1 }}>
+                <label className="form-label">Музика</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input className="form-input" value={musicPath} readOnly placeholder="Не вибрано" />
+                  <button className="btn-secondary" onClick={handlePickMusic}>...</button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <div className="gen-or-row">
+            <button className="btn-generate" onClick={handleGeneratePrompt}>
+              🧠 Згенерувати промпт
+            </button>
+            <div className="gen-or-divider"><span>або</span></div>
+            {imageProvider === 'flow'
+              ? <button className="btn-secondary btn-upload-img" onClick={handleDownloadFlowLatest}>
+                  ⬇️ Скачати останню з Flow
+                </button>
+              : <button className="btn-secondary btn-upload-img" onClick={handleUploadImage}>
+                  📁 Завантажити файл
+                </button>
+            }
+          </div>
+        </div>
+      )}
+
+      {/* ===== КРОК 1.5: Перегляд промптів ===== */}
+      {step === 'prompt' && (
+        <div className="gen-result">
+          {loading ? (
+            <div className="preview-loading">
+              <div className="spinner" />
+              <div>Генерація промпту ({promptProvider === 'claude_cli' ? 'Claude CLI' : 'Gemini'})...</div>
+              <div className="preview-sub">10-30 секунд</div>
+            </div>
+          ) : (
+            <>
+              <div className="form-section" style={{ width: '100%', maxWidth: 900 }}>
+                <label className="form-label">📸 Промпт для картинки (Nano Banana Pro JSON)</label>
+                <textarea
+                  className="form-textarea"
+                  value={generatedImagePrompt}
+                  onChange={e => {
+                    setGeneratedImagePrompt(e.target.value)
+                    setGeneratedImagePromptText(e.target.value)
+                  }}
+                  rows={12}
+                  style={{ fontFamily: 'monospace', fontSize: 12, width: '100%' }}
+                />
+              </div>
+              <div className="form-section" style={{ width: '100%', maxWidth: 900 }}>
+                <label className="form-label">🎬 Промпт для відео</label>
+                <textarea
+                  className="form-textarea"
+                  value={claudeVideoPrompt}
+                  onChange={e => setClaudeVideoPrompt(e.target.value)}
+                  rows={8}
+                  style={{ fontFamily: 'monospace', fontSize: 13, width: '100%' }}
+                />
+              </div>
+              <div className="form-section" style={{ width: '100%', maxWidth: 900 }}>
+                <label className="form-label">💬 Цитата для відео</label>
+                <input
+                  className="form-input"
+                  value={generatedQuote}
+                  onChange={e => setGeneratedQuote(e.target.value)}
+                  placeholder="Цитата згенерується автоматично..."
+                  style={{ fontFamily: 'Georgia, serif', fontSize: 15, width: '100%' }}
+                />
+              </div>
+              <div className="gen-actions">
+                <button className="btn-secondary" onClick={handleGeneratePrompt}>
+                  🔄 Перегенерувати промпт
+                </button>
+                <button className="btn-generate" onClick={handleGenerateImage}>
+                  🖼 Генерувати картинку
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ===== КРОК 2: Перегляд зображення ===== */}
+      {step === 'image' && (
+        <div className="gen-result">
+          <div className="gen-preview-box">
+            {loading ? (
+              <div className="preview-loading">
+                <div className="spinner" />
+                <div>Генерація зображення...</div>
+                <div className="preview-sub">Зазвичай 10-30 секунд</div>
+              </div>
+            ) : imageUrl ? (
+              <img src={imageUrl} alt="Generated" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 12 }} />
+            ) : null}
+          </div>
+
+          {!loading && imageUrl && (
+            <div className="gen-actions">
+              <button className="btn-secondary" onClick={handleGenerateImage}>
+                🔄 Перегенерувати
+              </button>
+              <button className="btn-primary" onClick={handleGenerateVideo}>
+                🎬 Анімувати відео →
+              </button>
+            </div>
+          )}
+          {!loading && imageUrl && (
+            <div className="gen-hint">Не подобається? Натисни "Перегенерувати" — буде обрано інший варіант промпту</div>
+          )}
+        </div>
+      )}
+
+      {/* ===== КРОК 3: Генерація відео ===== */}
+      {step === 'video' && (
+        <div className="gen-result">
+          <div className="gen-preview-box">
+            {loading ? (
+              <div className="preview-loading">
+                {imageUrl && (
+                  <img src={imageUrl} alt="" style={{
+                    position: 'absolute', inset: 0, width: '100%', height: '100%',
+                    objectFit: 'cover', borderRadius: 12, opacity: 0.4,
+                  }} />
+                )}
+                <div className="spinner" style={{ position: 'relative', zIndex: 1 }} />
+                <div style={{ position: 'relative', zIndex: 1 }}>Генерація відео...</div>
+                <div className="preview-sub" style={{ position: 'relative', zIndex: 1 }}>1-3 хвилини залежно від сервісу</div>
+              </div>
+            ) : videoUrl ? (
+              <video src={videoUrl} autoPlay loop controls style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 12 }} />
+            ) : null}
+          </div>
+
+          {!loading && videoUrl && (
+            <div className="gen-actions" style={{ flexDirection: 'column', gap: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+                <input type="checkbox" checked={slowMotion} onChange={e => setSlowMotion(e.target.checked)} />
+                🎬 Slow Motion (0.7x) — додає ~7 хв до обробки
+              </label>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn-secondary" onClick={() => { setStep('image'); setVideoPath(null); setVideoUrl(null) }}>
+                  ← Назад
+                </button>
+                <button className="btn-primary" onClick={handleCompose}>
+                  ✨ Додати текст і музику →
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ===== КРОК 4: Compose Editor ===== */}
+      {step === 'compose' && (
+        <div className="gen-result" style={{ alignItems: 'stretch' }}>
+          {loading ? (
+            <div className="gen-preview-box">
+              <div className="preview-loading">
+                {videoUrl && (
+                  <video src={videoUrl} autoPlay loop muted style={{
+                    position: 'absolute', inset: 0, width: '100%', height: '100%',
+                    objectFit: 'cover', borderRadius: 12, opacity: 0.4,
+                  }} />
+                )}
+                <div className="spinner" style={{ position: 'relative', zIndex: 1 }} />
+                <div style={{ position: 'relative', zIndex: 1 }}>Рендер фінального відео...</div>
+                <div className="preview-sub" style={{ position: 'relative', zIndex: 1 }}>FFmpeg обробляє відео</div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 24, width: '100%', flexWrap: 'wrap' }}>
+              {/* Preview з overlay */}
+              <div style={{ flex: '0 0 280px', position: 'relative' }}>
+                <div style={{ position: 'relative', width: 280, height: 498, borderRadius: 12, overflow: 'hidden', background: '#000' }}>
+                  {videoUrl && (
+                    <video
+                      ref={composeVideoRef}
+                      src={videoUrl}
+                      autoPlay loop muted
+                      onLoadedMetadata={e => {
+                        const dur = e.target.duration
+                        setVideoDuration(dur)
+                        if (trimEnd === 0) setTrimEnd(dur)
+                      }}
+                      onTimeUpdate={e => {
+                        const v = e.target
+                        if (trimStart > 0 && v.currentTime < trimStart) v.currentTime = trimStart
+                        if (trimEnd > 0.5 && v.currentTime >= trimEnd) v.currentTime = trimStart || 0
+                      }}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                  )}
+                  {/* Black overlay */}
+                  <div style={{
+                    position: 'absolute', inset: 0,
+                    background: `rgba(0,0,0,${overlayOpacity})`,
+                    pointerEvents: 'none',
+                  }} />
+                </div>
+              </div>
+
+              {/* Controls */}
+              <div style={{ flex: 1, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {/* Overlay opacity */}
+                <div>
+                  <label className="form-label">🌑 Затемнення: {Math.round(overlayOpacity * 100)}%</label>
+                  <input
+                    type="range" min="0" max="0.8" step="0.05"
+                    value={overlayOpacity}
+                    onChange={e => setOverlayOpacity(parseFloat(e.target.value))}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+
+                {/* Trim */}
+                <div>
+                  <label className="form-label">✂️ Обрізка: {trimStart.toFixed(1)}s — {(trimEnd || videoDuration).toFixed(1)}s / {videoDuration.toFixed(1)}s</label>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, opacity: 0.6 }}>Початок</span>
+                    <input
+                      type="range" min="0" max={Math.max(videoDuration - 0.5, 0)} step="0.1"
+                      value={trimStart}
+                      onChange={e => {
+                        const v = parseFloat(e.target.value)
+                        setTrimStart(v)
+                        if (composeVideoRef.current) composeVideoRef.current.currentTime = v
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 6 }}>
+                    <span style={{ fontSize: 11, opacity: 0.6 }}>Кінець</span>
+                    <input
+                      type="range" min="0.5" max={videoDuration || 10} step="0.1"
+                      value={trimEnd || videoDuration}
+                      onChange={e => {
+                        const v = parseFloat(e.target.value)
+                        setTrimEnd(v)
+                        if (composeVideoRef.current) composeVideoRef.current.currentTime = Math.max(v - 0.5, 0)
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                  </div>
+                </div>
+
+                {/* Slow Motion */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+                  <input type="checkbox" checked={slowMotion} onChange={e => setSlowMotion(e.target.checked)} />
+                  🎬 Slow Motion (0.7x)
+                </label>
+
+                {/* Music picker */}
+                <div>
+                  <label className="form-label">🎵 Музика</label>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                      className="form-input"
+                      value={musicPath ? musicPath.split(/[/\\]/).pop() : 'Без музики'}
+                      readOnly
+                      style={{ flex: 1, fontSize: 12 }}
+                    />
+                    <button className="btn-ghost" onClick={async () => {
+                      if (!isElectron) return
+                      const path = await window.api.dialog?.openFile?.({
+                        title: 'Оберіть музичний файл',
+                        filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'aac', 'm4a'] }],
+                      })
+                      if (path) setMusicPath(path)
+                    }} style={{ fontSize: 12, padding: '6px 10px' }}>📁</button>
+                    {musicPath && (
+                      <button className="btn-ghost" onClick={() => setMusicPath('')}
+                        style={{ fontSize: 12, padding: '6px 10px' }}>✕</button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Quote preview */}
+                <div>
+                  <label className="form-label">💬 Цитата</label>
+                  <input
+                    className="form-input"
+                    value={generatedQuote || quote}
+                    onChange={e => setGeneratedQuote(e.target.value)}
+                    style={{ fontSize: 13 }}
+                  />
+                </div>
+
+                {error && <div className="status-error">{error}</div>}
+
+                {/* Actions */}
+                <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                  <button className="btn-secondary" onClick={() => setStep('video')}>
+                    ← Назад
+                  </button>
+                  <button className="btn-primary" onClick={handleRenderFinal}>
+                    🎬 Рендер фінального відео
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ===== КРОК 5: Готово ===== */}
+      {step === 'done' && (
+        <div className="gen-result" style={{ alignItems: 'stretch' }}>
+          <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', width: '100%' }}>
+            {/* Превью відео */}
+            <div className="gen-preview-box" style={{ flex: '0 0 280px', height: 420 }}>
+              {finalUrl && (
+                <video src={finalUrl} autoPlay loop controls style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 12 }} />
+              )}
+            </div>
+
+            {/* Панель публікації */}
+            <div className="publish-panel">
+              <div className="publish-panel-title">📤 Публікація в Instagram</div>
+
+              {/* Підпис */}
+              <div className="form-section">
+                <label className="form-label">Підпис до публікації</label>
+                <textarea
+                  className="form-textarea"
+                  placeholder="Напишіть підпис... (emoji, хештеги)"
+                  value={publishCaption}
+                  onChange={e => setPublishCaption(e.target.value)}
+                  rows={4}
+                />
+              </div>
+
+              {/* Результат публікації */}
+              {publishResult && (
+                <div className={`publish-result ${publishResult.ok ? 'publish-result--ok' : 'publish-result--err'}`}>
+                  {publishResult.ok ? (
+                    <>
+                      ✅ Опубліковано!{' '}
+                      <span
+                        className="publish-link"
+                        onClick={() => isElectron && window.api.shell.openExternal(publishResult.url)}
+                      >
+                        Відкрити в Instagram →
+                      </span>
+                    </>
+                  ) : (
+                    <>❌ {publishResult.error}</>
+                  )}
+                </div>
+              )}
+
+              {/* Результат планування */}
+              {scheduleResult && (
+                <div className={`publish-result ${scheduleResult.ok ? 'publish-result--ok' : 'publish-result--err'}`}>
+                  {scheduleResult.ok
+                    ? `✅ Заплановано на ${new Date(scheduleResult.when).toLocaleString('uk-UA')}`
+                    : `❌ ${scheduleResult.error}`}
+                </div>
+              )}
+
+              {/* Режим планування */}
+              {scheduleMode && (
+                <div className="schedule-picker">
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <label className="form-label">Дата</label>
+                      <input
+                        type="date"
+                        className="form-input"
+                        value={scheduleDate}
+                        onChange={e => setScheduleDate(e.target.value)}
+                        min={new Date().toISOString().split('T')[0]}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label className="form-label">Час</label>
+                      <input
+                        type="time"
+                        className="form-input"
+                        value={scheduleTime}
+                        onChange={e => setScheduleTime(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <button className="btn-primary" onClick={handleSchedule} disabled={scheduling} style={{ flex: 1 }}>
+                      {scheduling ? '⏳ Зберігаємо...' : '📅 Запланувати'}
+                    </button>
+                    <button className="btn-ghost" onClick={() => setScheduleMode(false)}>Скасувати</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Кнопки дій */}
+              {!scheduleMode && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
+                  <button
+                    className="btn-primary"
+                    onClick={handlePublishNow}
+                    disabled={publishing || !!publishResult?.ok}
+                    style={{ background: '#e1306c' }}
+                  >
+                    {publishing ? '⏳ Публікуємо...' : '🚀 Опублікувати зараз'}
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={openScheduleMode}
+                    disabled={!!scheduleResult?.ok}
+                  >
+                    📅 Запланувати публікацію
+                  </button>
+                </div>
+              )}
+
+              <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 16, display: 'flex', gap: 10 }}>
+                <button className="btn-secondary" onClick={handleReset} style={{ flex: 1 }}>
+                  ⚡ Створити нове
+                </button>
+                <button className="btn-ghost" onClick={handleOpenFile}>
+                  📁 Файл
+                </button>
+                {isElectron && (
+                  <button
+                    className="btn-ghost"
+                    style={{ color: '#22c55e' }}
+                    onClick={async () => {
+                      try {
+                        await window.api.generations.save({
+                          style,
+                          variant_name: currentVariant?.name || '',
+                          image_prompt: currentVariant?.prompt || prompt || '',
+                          video_prompt: currentVariant?.video_prompt || '',
+                          quote: generatedQuote || quote,
+                          image_provider: imageProvider,
+                          video_provider: videoProvider,
+                          image_path: imagePath,
+                          video_path: videoPath,
+                          final_path: finalPath,
+                          music_path: musicPath || '',
+                          logo_path: logoPath || '',
+                          caption: publishCaption,
+                        })
+                        alert('Збережено в Історію!')
+                      } catch (e) {
+                        alert('Помилка: ' + String(e))
+                      }
+                    }}
+                  >
+                    💾 Зберегти
+                  </button>
+                )}
+              </div>
+
+              {finalPath && (
+                <div className="gen-hint" style={{ fontSize: 11, marginTop: 8 }}>
+                  {finalPath}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

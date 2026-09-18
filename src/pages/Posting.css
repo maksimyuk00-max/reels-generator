@@ -1,0 +1,194 @@
+/* ===== POSTING LAYOUT ===== */
+.posting-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.posting-cal {
+  flex: 0 0 380px;
+}
+
+.posting-panel {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 520px;
+}
+
+.posting-badge-count {
+  font-size: 13px;
+  color: #f0a500;
+  background: rgba(240,165,0,0.1);
+  padding: 4px 12px;
+  border-radius: 20px;
+}
+
+.posting-day-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ===== EXISTING POSTS ===== */
+.posting-existing {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.posting-post-item {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.posting-post-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.posting-post-time {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.posting-del-btn {
+  background: none;
+  border: none;
+  color: #e05252;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+.posting-del-btn:hover { opacity: 0.7; }
+
+.posting-post-file {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.posting-post-caption {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.posting-post-link {
+  font-size: 12px;
+  color: #e1306c;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.posting-post-link:hover { opacity: 0.8; }
+
+.posting-post-error {
+  font-size: 11px;
+  color: #e05252;
+}
+
+/* ===== STATUS BADGES ===== */
+.post-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+.post-badge--pending   { background: rgba(240,165,0,0.15);  color: #f0a500; }
+.post-badge--running   { background: rgba(59,130,246,0.15); color: #3b82f6; }
+.post-badge--ok        { background: rgba(34,197,94,0.15);  color: #22c55e; }
+.post-badge--err       { background: rgba(224,82,82,0.15);  color: #e05252; }
+
+/* ===== NEW POST FORM ===== */
+.posting-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.posting-form-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Video picker */
+.posting-video-picker {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  text-align: center;
+}
+.posting-video-picker:hover {
+  border-color: var(--accent);
+  background: rgba(139,92,246,0.05);
+}
+.pvp-icon  { font-size: 24px; }
+.pvp-name  { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.pvp-sub   { font-size: 12px; color: var(--text-muted); }
+.pvp-change { font-size: 11px; color: var(--accent); }
+
+/* Generate row */
+.posting-gen-row {
+  display: flex;
+  gap: 8px;
+}
+.posting-style-select { flex: 1; }
+.posting-gen-btn { white-space: nowrap; }
+
+/* Message */
+.posting-msg {
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.posting-msg--ok  { background: rgba(34,197,94,0.1);  border: 1px solid rgba(34,197,94,0.3);  color: #22c55e; }
+.posting-msg--err { background: rgba(224,82,82,0.1);  border: 1px solid rgba(224,82,82,0.3);  color: #e05252; }
+
+/* Time row */
+.posting-time-row {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Actions */
+.posting-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+.posting-publish-btn { flex: 1; }
+
+/* Past day */
+.cal-cell--past { opacity: 0.45; }

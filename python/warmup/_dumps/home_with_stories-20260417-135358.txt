@@ -1,0 +1,122 @@
+# UI DUMP: home_with_stories
+Time: 20260417-135358
+Current app: {'package': 'com.instagram.android', 'activity': '.activity.MainTabActivity', 'pid': 19312}
+
+## resourceId (104 total, IG only)
+  action_bar_LinearLayout
+  action_bar_action_buttons
+  action_bar_buttons_container_left
+  action_bar_buttons_container_right
+  action_bar_root
+  action_bar_title_view
+  activity_and_camera_shared_views_main_container
+  avatar_container
+  avatar_image_view
+  avatar_view
+  bottom_sheet_camera_container
+  clips_tab
+  container
+  direct_tab
+  dismiss_button
+  feed_tab
+  footer_space
+  gap_binder_group
+  information_container
+  inline_follow_button
+  layout_container_center_right_coordinator_layout
+  layout_container_main
+  layout_container_main_panel
+  layout_container_main_wrapper
+  layout_container_right
+  layout_container_swipeable
+  main_feed_action_bar
+  media_group
+  media_option_button
+  modal_container
+  netego_carousel_container_view
+  netego_carousel_cta
+  netego_carousel_header
+  netego_carousel_title
+  netego_carousel_view
+  notification
+  outer_container
+  overlay_layout_container
+  profile_tab
+  reel_empty_badge
+  reels_tray_container
+  refreshable_container
+  row_feed_photo_imageview
+  row_feed_photo_profile_imageview
+  row_feed_photo_profile_name
+  row_feed_profile_header
+  search_tab
+  secondary_label
+  seen_state
+  sticky_header_list
+  suggested_entity_card_container
+  suggested_entity_card_context
+  suggested_entity_card_context_stacked_avatar_view
+  suggested_entity_card_image
+  suggested_entity_card_image_frame
+  suggested_entity_card_name
+  suggested_entity_card_social_context_container
+  suggested_entity_card_top_frame
+  suggested_user_card_follow_button
+  swipe_navigation_container
+  swipeable_nav_view_pager_inner_recycler_view
+  swipeable_tab_view_pager
+  tab_avatar
+  tab_bar
+  tab_bar_shadow
+  tab_icon
+  title_container
+  title_logo
+  title_logo_chevron_container
+  username
+  video_container
+  wrapper
+
+## texts (13)
+  '11:48'
+  '37'
+  'AI info'
+  'Follow'
+  'Followed by stoic_ism666'
+  'See all'
+  'Suggested for you'
+  'T.Mc'
+  'Your story'
+  'achieverr_mindset\xa0\xa0'
+  'bookspie._'
+  'martin halford'
+  'mushinjournal'
+
+## content-desc (28)
+  'AI info'
+  'Add to story'
+  'Aeroplane mode.'
+  'App vault notification: '
+  'Back'
+  'Battery 37 percent.'
+  'Dismiss'
+  'Follow T.Mc'
+  'Follow martin halford'
+  'Follow shahnawaz siddiqui'
+  'Home'
+  'Instagram Home feed'
+  'Message'
+  'More actions for this post'
+  'Overview'
+  'Profile'
+  'Profile picture of achieverr_mindset'
+  'Reels'
+  'Search and explore'
+  'Suggested Photo by shahnawaz siddiqui, 4,757 likes, 29 comments'
+  'Suggested for you'
+  'Wifi signal full.'
+  'achieverr_mindset posted a photo 5 April'
+  'achieverr_mindset\xa0\xa0'
+  "bookspie._'s story, 1 of 3, Unseen."
+  "garrylasterman's story, 0 of 3, Unseen."
+  "mushinjournal's story, 2 of 3, Seen."
+  'reels tray container'

@@ -1,0 +1,97 @@
+# UI DUMP: profile_other
+Time: 20260417-124901
+Current app: {'package': 'com.instagram.android', 'activity': 'com.instagram.modal.ModalActivity', 'pid': 30220}
+
+## resourceId (78 total, IG only)
+  action_bar_layout
+  action_bar_root
+  action_bar_title
+  action_bar_username_container
+  button_container
+  clips_grid_recyclerview
+  clips_grid_shimmer_container
+  coordinator_root_layout
+  layout_container_main
+  layout_container_parent
+  left_action_bar_buttons
+  play_count_container
+  play_count_logo
+  preview_clip_play_count
+  preview_clip_thumbnail
+  profile_action_bar
+  profile_header_actions_top_row
+  profile_header_avatar_container_top_left_stub
+  profile_header_container
+  profile_header_familiar_followers_label
+  profile_header_familiar_followers_value
+  profile_header_familiar_following_label
+  profile_header_familiar_following_value
+  profile_header_familiar_post_count_label
+  profile_header_familiar_post_count_value
+  profile_header_fixed_list
+  profile_header_follow_button
+  profile_header_followers_stacked_familiar
+  profile_header_following_stacked_familiar
+  profile_header_full_name_above_vanity
+  profile_header_metrics_full_width
+  profile_header_post_count_front_familiar
+  profile_header_user_action_follow_button
+  profile_tab_icon_dropdown
+  profile_tab_icon_view
+  profile_tab_layout
+  profile_tabs_bottom_divider
+  profile_tabs_container
+  profile_user_info_compose_view
+  profile_viewpager
+  right_action_bar_buttons
+  row_profile_header
+  row_profile_header_imageview
+  row_profile_header_imageview_frame_layout
+  swipe_refresh_animated_progressbar_container
+  swipe_refresh_animated_progressbar_container_background
+  tab_appbar
+
+## texts (16)
+  '0'
+  '10:43'
+  '124'
+  '2,656'
+  '28.1K'
+  '4,046'
+  '53'
+  '981'
+  'Follow'
+  'Message'
+  'Motivation | Masculinity | Health'
+  'fitwithsamofficials'
+  'followers'
+  'following'
+  'posts'
+  '• Discipline Fuels Daily Action.&#10;• Fitness x Masculine Wisdom.&#10;• Follow to Conquer Yourself.'
+
+## content-desc (25)
+  '0following'
+  '124posts'
+  '28.1Kfollowers'
+  'Aeroplane mode.'
+  'App vault notification: '
+  'Back'
+  'Battery 53 percent.'
+  'Follow Motivation | Masculinity | Health'
+  'Grid View'
+  'Home'
+  'Message'
+  'Options'
+  'Overview'
+  'Photos of You'
+  'Profile picture'
+  'Reel by fitwithsamofficials. View count 1,056. Double-tap to play or pause.'
+  'Reel by fitwithsamofficials. View count 1,651. Double-tap to play or pause.'
+  'Reel by fitwithsamofficials. View count 2,169. Double-tap to play or pause.'
+  'Reel by fitwithsamofficials. View count 2,656. Double-tap to play or pause.'
+  'Reel by fitwithsamofficials. View count 4,046. Double-tap to play or pause.'
+  'Reel by fitwithsamofficials. View count 981. Double-tap to play or pause.'
+  'Reels'
+  'Reposted'
+  'Wifi signal full.'
+  'fitwithsamofficials'

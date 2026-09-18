@@ -1,0 +1,18 @@
+
+> reels-generator@1.0.0 dev
+> concurrently "vite" "wait-on http://localhost:5173 && electron ."
+
+[0] [2m14:37:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m Re-optimizing dependencies because vite config has changed
+[0] 
+[0]   [32m[1mVITE[22m v8.0.3[39m  [2mready in [0m[1m725[22m[2m[0m ms[22m
+[0] 
+[0]   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+[0] [2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[1] 
+[1] [Startup] cleaning up 1 orphaned running sessions
+[1] [Startup] #383 recovered as 'done' (elapsed 9.8min > 3min)
+[1] [Python] (node:25132) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+[1] (Use `node --trace-deprecation ...` to show where the warning was created)
+[1] 
+[1] [Python] exited with code null
+[1] wait-on http://localhost:5173 && electron . exited with code 0

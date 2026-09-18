@@ -1,0 +1,9 @@
+fastapi==0.115.5
+uvicorn==0.32.1
+instagrapi==2.1.3
+requests==2.32.3
+uiautomator2==3.2.5
+
+# iOS automation (WebDriverAgent + go-ios)
+appium-python-client>=4.0.0
+# pymobiledevice3>=4.0.0  # потребує lzfse → Visual Studio Build Tools. Для PoC media upload через AirDrop manual.

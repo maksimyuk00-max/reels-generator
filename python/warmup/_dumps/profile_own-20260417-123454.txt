@@ -1,0 +1,21 @@
+# UI DUMP: profile_own
+Time: 20260417-123454
+Current app: {'package': 'com.miui.home', 'activity': '.launcher.Launcher', 'pid': 2483}
+
+## resourceId (45 total, IG only)
+
+## texts (7)
+  '10:29'
+  '12:29'
+  '55'
+  'Aeroplane mode'
+  'Friday 17/04'
+  'Kiev'
+  'London'
+
+## content-desc (5)
+  'Aeroplane mode.'
+  'Battery 55 percent.'
+  'Camera'
+  'Shortcut'
+  'Wifi signal full.'

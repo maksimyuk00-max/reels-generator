@@ -1,0 +1,61 @@
+{
+  "styles": {
+    "Hokan": {
+      "variants": [
+        {
+          "name": "Samurai rain profile",
+          "prompt": "RAW photo Canon EOS R5 85mm f/1.4, Japanese samurai warrior standing in torrential rain, side profile close-up from chest up, battle-worn matte black lacquer yoroi armor soaked in rain, black iron oni demon mask seen from side with fangs, black kabuto helmet with curved horns, rain streaks against dark grey sky, shallow depth of field foggy background, desaturated cold steel tones, NOT illustration NOT CGI NOT anime",
+          "video_prompt": "Cinematic slow motion. A continuous single unbroken shot with constant unchanging dim overcast lighting throughout the entire video from start to finish. The camera slowly arcs from the warrior side profile toward his front quarter over the full duration. Rain falls at a steady constant pace. The warrior slowly turns his head toward camera following its movement. No flashes no explosions no sparks no fire no bright light appears at any point. The lighting remains exactly the same from beginning to end."
+        },
+        {
+          "name": "Ronin dark forest",
+          "prompt": "RAW photo Canon EOS R5 35mm f/2, Japanese ronin warrior standing in dark rainy forest, full body dramatic low angle looking up at him, battle-worn black lacquer armor with mud and scratches, katana drawn at his side dripping water, no mask showing weathered scarred face with stubble, dark twisted oak trees behind in fog, muddy ground with puddles reflecting grey sky, volumetric fog between trees, NOT illustration NOT CGI NOT anime",
+          "video_prompt": "Cinematic slow motion. A continuous single unbroken shot with constant unchanging grey forest lighting throughout the entire video. The camera slowly pushes in from a low angle toward the ronin standing among dark trees. Rain falls steadily without changing. Fog drifts between the tree trunks. The ronin slowly lowers his gaze down toward camera with cold intent. No flashes no explosions no bright light at any point. The same dim forest light from start to finish."
+        },
+        {
+          "name": "Shogun mounted snow",
+          "prompt": "RAW photo ARRI Alexa 85mm f/1.8, Japanese shogun warlord mounted on massive black war horse in heavy snowfall, medium shot slightly low angle facing camera, ornate black yoroi armor with tarnished gold accents covered in snow, black kabuto with large crescent horns, black iron menpo mask, horse dark armored barding with snow on mane, white-grey blizzard void behind no landscape visible, cold flat winter light, desaturated monochrome, NOT illustration NOT CGI NOT anime NOT bright",
+          "video_prompt": "Cinematic slow motion. A continuous single unbroken shot with constant unchanging cold winter overcast lighting throughout the entire video. The camera holds low angle and very slowly pushes in toward the mounted shogun from medium shot to close-up of his mask. Snow falls steadily at the same pace throughout. The horse shifts weight slightly and breathes visible steam. No flashes no bright light no fire at any point. Same flat cold winter grey from start to finish."
+        },
+        {
+          "name": "Demon mask extreme CU",
+          "prompt": "RAW photo Canon EOS R5 100mm f/1.4 macro, extreme close-up of samurai oni demon mask filling entire frame in heavy rain, black aged iron with deep battle scratches and rust in grooves of angry expression, rain water streaming down every line collecting on fangs, left half lit by cold grey ambient light right half in pure black shadow, black void background, completely desaturated monochrome, NOT illustration NOT CGI NOT anime NOT bright",
+          "video_prompt": "Cinematic slow motion. A continuous single unbroken shot with constant unchanging dim cold side lighting throughout the entire video. The camera is very close to the demon mask and pushes forward extremely slowly toward the eye slit over the full duration. Rain water traces the iron grooves of the angry face. The warrior beneath subtly tilts his head down bringing the mask closer. No flashes no explosions no bright light at any point. Same cold dim light from start to finish."
+        },
+        {
+          "name": "Samurai torii gate",
+          "prompt": "RAW photo Canon EOS R5 85mm f/1.4, Japanese samurai warrior standing near weathered stone torii gate in rain, full body low angle shot, dark moody atmosphere, battle-worn matte black lacquer armor with thick rope sageo ties, katana drawn with rain water dripping from blade tip, muddy stone path with puddles, blurred torii gate and dark trees in foggy background, volumetric ground fog, NOT illustration NOT CGI NOT anime",
+          "video_prompt": "Cinematic slow motion. A continuous single unbroken shot with constant unchanging grey overcast lighting throughout the entire video. The camera slowly pushes in from low angle toward the samurai standing before the torii gate. Rain falls at constant steady pace. Fog drifts low around the stone path. The warrior slowly shifts his katana to a guard position. No flashes no bright light no fire at any point. Same flat grey light from start to finish."
+        },
+        {
+          "name": "Ronin on bridge",
+          "prompt": "RAW photo ARRI Alexa 85mm f/1.8, lone ronin warrior standing on ancient wooden bridge in heavy rain, medium shot from slightly below bridge level, dark worn layered robes over light armor, long wet black hair loose in wind, katana sheathed at hip with hand resting on handle, misty river gorge below with dark water, twisted pine trees on both sides, heavy fog, grey overcast no sun, NOT illustration NOT CGI NOT anime NOT bright",
+          "video_prompt": "Cinematic slow motion. A continuous single unbroken shot with constant unchanging dim overcast lighting throughout the entire video. The camera slowly approaches the ronin along the bridge from one end getting closer over the full duration. Rain falls steadily. Fog moves slowly through the gorge below. The ronin slowly turns his body toward camera and tightens his grip on the katana handle. No flashes no bright light no fire at any point. Same grey dim light from start to finish."
+        },
+        {
+          "name": "Warrior monk mountain",
+          "prompt": "RAW photo RED Komodo 50mm f/2, sohei warrior monk standing on rocky mountain ridge in driving rain, medium close-up from side, dark iron chest armor over heavy dark monk robes, black iron half-mask covering jaw, simple round jingasa helmet, naginata polearm resting on shoulder, steep foggy mountain slope disappearing into grey clouds behind, cold desaturated blue-grey tones, NOT illustration NOT CGI NOT anime",
+          "video_prompt": "Cinematic slow motion. A continuous single unbroken shot with constant unchanging grey overcast mountain lighting throughout the entire video. The camera holds medium close-up and slowly drifts from the monks side toward his front. Rain falls diagonally at a steady pace. Mountain fog drifts slowly across the background. The monk slowly turns his weathered eyes toward camera. No flashes no fire no bright light at any point. Same cold flat grey from first to last frame."
+        },
+        {
+          "name": "Ashigaru broken banner",
+          "prompt": "RAW photo Canon EOS R5 35mm f/2, lone ashigaru foot soldier in heavy rain holding tall broken war banner pole, dramatic full body low angle looking up, simple dark iron do-maru armor and leather, conical jingasa helmet with rain streaming off edges, dark cloth face wrap soaked through, devastated muddy battlefield with broken weapons stuck in ground behind, torn banner fabric whipping in strong wind above, flat grey overcast sky, desaturated cold grey tones, NOT illustration NOT CGI NOT anime",
+          "video_prompt": "Cinematic slow motion. A continuous single unbroken shot with constant unchanging cold overcast lighting throughout the entire video. The camera slowly tilts upward from the soldiers mud-covered sandals up his armored body to the torn banner snapping in wind above over the full duration. Rain falls at constant pace throughout. The banner whips and twists in the wind. No flashes no bright light no fire at any point. Same flat cold grey from start to finish."
+        },
+        {
+          "name": "Samurai kneeling snow",
+          "prompt": "RAW photo Canon EOS R5 85mm f/1.4, samurai warrior kneeling in deep fresh snow, medium close-up slightly above eye level, matte black armor plates collecting thick snow on every surface, kabuto helmet removed placed in snow beside him revealing dark iron menpo mask, katana laid across his knees, heavy snowfall in large soft flakes, bare dark tree branches barely visible through dense blizzard behind, desaturated near-monochrome cold tones, flat winter light, NOT illustration NOT CGI NOT anime NOT bright",
+          "video_prompt": "Cinematic slow motion. A continuous single unbroken shot with constant unchanging cold flat winter lighting throughout the entire video. The camera slowly drifts from above the kneeling warrior down to his eye level while slightly circling to his front. Snow falls steadily in large soft flakes at constant pace. The samurai very slowly raises his bowed head until his masked eyes meet the camera directly. No flashes no bright light no fire at any point. Same cold winter grey from first to last frame."
+        },
+        {
+          "name": "Ronin ruined palace",
+          "prompt": "RAW photo ARRI Alexa 40mm f/2, ronin warrior standing alone inside destroyed Japanese palace hall, full body low angle, shattered wooden pillars and torn painted silk screens scattered around, dark worn armor with no clan markings and visible battle damage, dark cloth mask covering lower face cold focused eyes above, rain pouring through massive holes in collapsed ornate roof, cold grey daylight filtering from above casting sharp shadows, wet wooden floor with standing puddles reflecting broken ceiling, NOT illustration NOT CGI NOT anime NOT bright",
+          "video_prompt": "Cinematic slow motion. A continuous single unbroken shot with constant unchanging cold grey daylight through the destroyed roof throughout the entire video. The camera starts behind a fallen wooden pillar and slowly slides sideways to reveal the ronin standing in a shaft of grey light amid the ruins. Rain falls through the roof at a constant steady pace splashing in floor puddles. The ronin slowly turns his head toward the camera as it reveals him. No flashes no bright light no fire at any point. Same dim cold grey from start to finish."
+        }
+      ]
+    },
+    "Mushin": {
+      "variants": []
+    }
+  }
+}

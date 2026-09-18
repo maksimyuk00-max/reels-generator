@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-electron/
+*.db
+*.log
+*.exe
+*.zip
+*.bin
+*.dmg
+*.ipa
