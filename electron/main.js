@@ -63,36 +63,57 @@ function startPython() {
   })
 
   // Windows: "python" у PATH часто є Microsoft Store стабом (exit 9009, нічого не робить).
-  // Шукаємо справжній python: py launcher → відомі шляхи → python3 fallback.
+  // Шукаємо справжній python: кожен кандидат ПРОБЄМО реальним запуском імпорту
+  // (existsSync брехав у packaged-додатку, а py -3 може вказувати на free-threaded
+  // білд без pydantic_core). Це водночас відсікає неіснуючі шляхи й несумісні білди.
   async function resolvePythonCmd() {
     if (process.platform !== 'win32') return 'python3'
-    const fs2 = require('fs')
+    const { execFile } = require('child_process')
     const candidates = [
       path.join(os.homedir(), 'AppData', 'Local', 'Python', 'bin', 'python.exe'),
       path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python.exe'),
       path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'python.exe'),
-      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'python.exe'),
       'C:/Python313/python.exe',
       'C:/Python312/python.exe',
+      'C:/Program Files/Python313/python.exe',
+      'C:/Program Files/Python312/python.exe',
     ]
     for (const c of candidates) {
-      try { if (fs2.existsSync(c)) return c } catch (_) {}
+      const ok = await new Promise((resolve) => {
+        try {
+          execFile(c, ['-c', 'import fastapi, pydantic_core, uvicorn'],
+            { timeout: 20000, windowsHide: true }, (err) => resolve(!err))
+        } catch (_) { resolve(false) }
+      })
+      if (ok) { console.log('[Python] resolved:', c); return c }
+      else console.log('[Python] candidate failed:', c)
     }
-    // py launcher
+    // py launcher: спершу конкретна версія (py -3 може вказати на 3.13t free-threaded),
+    // потім загальний py -3, потім python з PATH.
     const pyFound = await new Promise((resolve) => {
+      const probe = spawn('py', ['-3.13', '--version'])
+      probe.on('exit', (code) => resolve(code === 0))
+      probe.on('error', () => resolve(false))
+    })
+    if (pyFound) return 'py -3.13'
+    const pyAny = await new Promise((resolve) => {
       const probe = spawn('py', ['-3', '--version'])
       probe.on('exit', (code) => resolve(code === 0))
       probe.on('error', () => resolve(false))
     })
-    if (pyFound) return 'py -3'
+    if (pyAny) return 'py -3'
     return 'python'
   }
 
   const trySpawn = (cmdRaw) => {
-    // "py -3" → spawn('py', ['-3', scriptPath])
+    // Розділяємо ТОЛЬКО формат "py -3" / "py -3.13" (пробіл усередині, шлях без пробілів).
+    // Повні шляхи типу "C:/Program Files/.../python.exe" містять пробіли — їх не чіпаємо:
+    // spawn з окремим аргументом-рядком безпечний для пробілів.
     let cmd = cmdRaw, extraArgs = []
-    const parts = String(cmdRaw).split(' ')
-    if (parts.length > 1) { cmd = parts[0]; extraArgs = parts.slice(1) }
+    if (/^py\s/.test(String(cmdRaw))) {
+      const parts = String(cmdRaw).split(' ')
+      cmd = parts[0]; extraArgs = parts.slice(1)
+    }
     const proc = spawn(cmd, [...extraArgs, scriptPath], {
       cwd: pythonDir,
       env: {
@@ -779,6 +800,37 @@ ipcMain.handle('share:status', () =>
 ipcMain.handle('share:localIp', () =>
   pyFetch('/share/local-ip', { timeout: 10000 })
 )
+// ===== Синхронізація з GitHub (сторінка /sync) =====
+const syncLib = require('./sync')
+
+ipcMain.handle('sync:status', async (_, repoPath) => {
+  const settings = await getSettings()
+  return syncLib.getStatus(repoPath, settings?.sync?.devRepoPath)
+})
+
+ipcMain.handle('sync:deploy', async (_, payload = {}) => {
+  const settings = await getSettings()
+  let dataJson = null
+  if (payload.posts || payload.personas) {
+    dataJson = db.exportSyncData({ posts: !!payload.posts, personas: !!payload.personas })
+  }
+  return syncLib.deploy(payload.repoPath, payload.message, dataJson, settings?.sync?.devRepoPath)
+})
+
+ipcMain.handle('sync:pull', async (_, repoPath) => {
+  const settings = await getSettings()
+  const result = await syncLib.pull(repoPath, settings?.sync?.devRepoPath)
+  // Якщо синк приніс дані — одразу мердж у БД (тільки додавання, без перезапису)
+  if (result.ok && result.dataJson) {
+    result.merged = db.mergeSyncedData(result.dataJson)
+  }
+  return result
+})
+
+ipcMain.handle('sync:saveRepoPath', async (_, repoPath) => {
+  await saveSettings({ sync: { devRepoPath: String(repoPath || '').trim() } })
+  return { ok: true }
+})
 // Вибір кількох окремих файлів (мульти-селект)
 ipcMain.handle('dialog:openFiles', async (_, options) => {
   const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]

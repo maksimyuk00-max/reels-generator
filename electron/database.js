@@ -1292,6 +1292,85 @@ function updateThreadGenerated(id, data) {
   return getDb().prepare('SELECT * FROM threads_generated WHERE id = ?').get(id)
 }
 
+// ===== Синхронізація даних через GitHub (кнопки в UI) =====
+// Філософія: дані ДОПОВНЮЮТЬ одне одного (николи не перезаписуються),
+// код синхронізується через звичайний git commit/push/pull.
+
+function exportSyncData(options = {}) {
+  // options.posts — календар постингу, options.personas — персони
+  const d = getDb()
+  const data = {
+    _meta: { exported_at: new Date().toISOString(), app: 'reels-generator', version: 1 },
+  }
+  if (options.posts) {
+    data.scheduled_posts = d.prepare('SELECT * FROM scheduled_posts ORDER BY id ASC').all()
+  }
+  if (options.personas) {
+    data.personas = d.prepare('SELECT * FROM personas ORDER BY id ASC').all()
+  }
+  return data
+}
+
+function mergeSyncedData(data) {
+  // Мердж = INSERT OR IGNORE: існуючі рядки не чіпаються, додаються тільки нові.
+  const d = getDb()
+  const result = { added_posts: 0, added_personas: 0, skipped_files: 0 }
+  const wrap = (fn) => {
+    try { return fn() } catch (e) { result.error = String(e); return null }
+  }
+
+  if (Array.isArray(data.personas)) {
+    // Персони мають текстовий id → INSERT OR IGNORE по id
+    wrap(() => {
+      const ins = d.prepare(`INSERT OR IGNORE INTO personas
+        (id, name, description, platform, subreddit, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      for (const p of data.personas) {
+        const r = ins.run(p.id, p.name, p.description, p.platform, p.subreddit,
+          p.created_at, p.updated_at)
+        result.added_personas += r.changes
+      }
+    })
+  }
+
+  if (Array.isArray(data.scheduled_posts)) {
+    // Пости не мають природного унікального ключа (id конфліктуватиме з локальними
+    // автоінкрементами) → дублікати відсікаємо по (video_path + scheduled_at + caption).
+    wrap(() => {
+      const exists = d.prepare(`SELECT COUNT(*) AS n FROM scheduled_posts
+        WHERE video_path IS ? AND scheduled_at IS ? AND caption IS ?`)
+      const ins = d.prepare(`INSERT INTO scheduled_posts
+        (video_path, caption, scheduled_at, status, published_at, instagram_url, error,
+         created_at, account_id, is_dry_run, content_type, image_paths_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      for (const p of data.scheduled_posts) {
+        if (exists.get(p.video_path, p.scheduled_at, p.caption).n > 0) continue
+        // Захист: якщо файл відео відсутній на цьому пристрої — пост не має публікуватись.
+        let status = p.status || 'pending'
+        let error = p.error
+        try {
+          if (status === 'pending' && p.video_path && !require('fs').existsSync(p.video_path)) {
+            status = 'missing_video'
+            error = 'Синк: відеофайл відсутній на цьому пристрої'
+            result.skipped_files++
+          }
+        } catch (_) {}
+        // account_id — машинно-локальне посилання: якщо такого акаунта тут нема → NULL
+        let accountId = p.account_id ?? null
+        if (accountId != null) {
+          const acc = d.prepare('SELECT id FROM accounts WHERE id = ?').get(accountId)
+          if (!acc) accountId = null
+        }
+        const r = ins.run(p.video_path, p.caption, p.scheduled_at, status, p.published_at,
+          p.instagram_url, error, p.created_at, accountId, p.is_dry_run ? 1 : 0,
+          p.content_type, p.image_paths_json)
+        result.added_posts += r.changes
+      }
+    })
+  }
+  return result
+}
+
 module.exports = {
   getAllAccounts,
   addAccount,
@@ -1369,4 +1448,7 @@ module.exports = {
   updateThreadsSession,
   cancelThreadsSession,
   deleteThreadsSessions,
+  // Синхронізація даних через GitHub
+  exportSyncData,
+  mergeSyncedData,
 }

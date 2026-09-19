@@ -44,6 +44,7 @@ const navItems = [
   {
     section: 'СИСТЕМА',
     items: [
+      { path: '/sync',     label: 'Синхронізація', icon: '🔄' },
       { path: '/settings', label: 'Налаштування', icon: '⚙️' },
     ],
   },

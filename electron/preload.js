@@ -161,6 +161,13 @@ contextBridge.exposeInMainWorld('api', {
     status:  ()             => ipcRenderer.invoke('share:status'),
     localIp: ()             => ipcRenderer.invoke('share:localIp'),
   },
+  // Синхронізація з GitHub (сторінка /sync)
+  sync: {
+    status:      (repoPath)    => ipcRenderer.invoke('sync:status', repoPath),
+    deploy:      (payload)     => ipcRenderer.invoke('sync:deploy', payload),
+    pull:        (repoPath)    => ipcRenderer.invoke('sync:pull', repoPath),
+    saveRepoPath:(repoPath)    => ipcRenderer.invoke('sync:saveRepoPath', repoPath),
+  },
   // Threads scheduler / plan
   threadsPlan: {
     generate: (config, dateRange, replace) => ipcRenderer.invoke('threads:generatePlan', config, dateRange, replace),

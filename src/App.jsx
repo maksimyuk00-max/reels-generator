@@ -19,6 +19,7 @@ import ThreadsContent from './pages/ThreadFeed'
 import iPhoneBridge from './pages/iPhoneBridge'
 import UtmLinks from './pages/UtmLinks'
 import YtcFusion from './pages/YtcFusion'
+import Sync from './pages/Sync'
 
 export default function App() {
   return (
@@ -43,6 +44,7 @@ export default function App() {
         <Route path="/iphone" element={<iPhoneBridge />} />
         <Route path="/utm" element={<UtmLinks />} />
         <Route path="/ytcfusion" element={<YtcFusion />} />
+        <Route path="/sync" element={<Sync />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
     </Layout>
