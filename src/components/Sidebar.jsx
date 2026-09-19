@@ -29,6 +29,7 @@ const navItems = [
     section: 'ІНСТРУМЕНТИ',
     items: [
       { path: '/generator', label: 'Генератор відео', icon: '⚡' },
+      { path: '/ytcfusion', label: 'Ytc Fusion', icon: '🧬' },
       { path: '/editor',    label: 'Редактор',        icon: '✂️' },
       { path: '/posts',     label: 'Пости / Карусель', icon: '📸' },
       { path: '/carousel-agent', label: 'Carousel Agent', icon: '🤖' },

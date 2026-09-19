@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell } = require('electron')
 const path = require('path')
+const os = require('os')
 const { spawn } = require('child_process')
 const http = require('http')
 const db = require('./database')
@@ -58,11 +59,41 @@ function startPython() {
       console.log('[Python] Already running on port', PYTHON_PORT, '— skipping spawn')
       return
     }
-    trySpawn('python')
+    resolvePythonCmd().then(cmd => trySpawn(cmd))
   })
 
-  const trySpawn = (cmd) => {
-    const proc = spawn(cmd, [scriptPath], {
+  // Windows: "python" у PATH часто є Microsoft Store стабом (exit 9009, нічого не робить).
+  // Шукаємо справжній python: py launcher → відомі шляхи → python3 fallback.
+  async function resolvePythonCmd() {
+    if (process.platform !== 'win32') return 'python3'
+    const fs2 = require('fs')
+    const candidates = [
+      path.join(os.homedir(), 'AppData', 'Local', 'Python', 'bin', 'python.exe'),
+      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python.exe'),
+      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'python.exe'),
+      path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'python.exe'),
+      'C:/Python313/python.exe',
+      'C:/Python312/python.exe',
+    ]
+    for (const c of candidates) {
+      try { if (fs2.existsSync(c)) return c } catch (_) {}
+    }
+    // py launcher
+    const pyFound = await new Promise((resolve) => {
+      const probe = spawn('py', ['-3', '--version'])
+      probe.on('exit', (code) => resolve(code === 0))
+      probe.on('error', () => resolve(false))
+    })
+    if (pyFound) return 'py -3'
+    return 'python'
+  }
+
+  const trySpawn = (cmdRaw) => {
+    // "py -3" → spawn('py', ['-3', scriptPath])
+    let cmd = cmdRaw, extraArgs = []
+    const parts = String(cmdRaw).split(' ')
+    if (parts.length > 1) { cmd = parts[0]; extraArgs = parts.slice(1) }
+    const proc = spawn(cmd, [...extraArgs, scriptPath], {
       cwd: pythonDir,
       env: {
         ...process.env,
@@ -718,6 +749,43 @@ ipcMain.handle('python:parseReels', async (_, username, accountId, amount = 50) 
 ipcMain.handle('python:downloadReel', (_, videoUrl, savePath) =>
   pyFetch('/download', { method: 'POST', body: { video_url: videoUrl, save_path: savePath } })
 )
+
+// ===== TIGFusion — батч-унікалізація відео =====
+ipcMain.handle('tigfusion:run', (_, params) =>
+  pyFetch('/tigfusion/run', { method: 'POST', body: params, timeout: 60000 })
+)
+ipcMain.handle('tigfusion:status', () =>
+  pyFetch('/tigfusion/status', { timeout: 15000 })
+)
+ipcMain.handle('tigfusion:checkFfmpeg', () =>
+  pyFetch('/tigfusion/check-ffmpeg', { timeout: 15000 })
+)
+ipcMain.handle('tigfusion:stop', () =>
+  pyFetch('/tigfusion/stop', { method: 'POST', timeout: 15000 })
+)
+ipcMain.handle('tigfusion:listDir', (_, path) =>
+  pyFetch(`/tigfusion/list-dir?path=${encodeURIComponent(path)}`, { timeout: 15000 })
+)
+// ===== LAN Share — роздача файлів у мережу =====
+ipcMain.handle('share:start', (_, params) =>
+  pyFetch('/share/start', { method: 'POST', body: params, timeout: 30000 })
+)
+ipcMain.handle('share:stop', () =>
+  pyFetch('/share/stop', { method: 'POST', timeout: 15000 })
+)
+ipcMain.handle('share:status', () =>
+  pyFetch('/share/status', { timeout: 15000 })
+)
+ipcMain.handle('share:localIp', () =>
+  pyFetch('/share/local-ip', { timeout: 10000 })
+)
+// Вибір кількох окремих файлів (мульти-селект)
+ipcMain.handle('dialog:openFiles', async (_, options) => {
+  const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+  const result = await dialog.showOpenDialog(win, options)
+  if (result.canceled) return null
+  return result.filePaths  // масив шляхів
+})
 
 // Збагачення переглядів — прямий HTTP-запит до Instagram API
 ipcMain.handle('python:enrichViews', async (event, reelIds) => {

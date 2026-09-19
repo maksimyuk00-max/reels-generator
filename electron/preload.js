@@ -144,6 +144,22 @@ contextBridge.exposeInMainWorld('api', {
   // Dialog
   dialog: {
     openFile: (options) => ipcRenderer.invoke('dialog:openFile', options),
+    openFiles: (options) => ipcRenderer.invoke('dialog:openFiles', options),
+  },
+  // TIGFusion — батч-унікалізація відео
+  tigfusion: {
+    run:        (params) => ipcRenderer.invoke('tigfusion:run', params),
+    status:     ()       => ipcRenderer.invoke('tigfusion:status'),
+    checkFfmpeg:()       => ipcRenderer.invoke('tigfusion:checkFfmpeg'),
+    listDir:    (path)   => ipcRenderer.invoke('tigfusion:listDir', path),
+    stop:       ()       => ipcRenderer.invoke('tigfusion:stop'),
+  },
+  // LAN Share — роздача файлів у мережу для телефонів
+  share: {
+    start:   (folder, port) => ipcRenderer.invoke('share:start', { folder, port }),
+    stop:    ()             => ipcRenderer.invoke('share:stop'),
+    status:  ()             => ipcRenderer.invoke('share:status'),
+    localIp: ()             => ipcRenderer.invoke('share:localIp'),
   },
   // Threads scheduler / plan
   threadsPlan: {

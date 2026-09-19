@@ -21,6 +21,7 @@ import android_poster
 import threads_poster
 import threads_monitor
 import reddit_monitor
+import tigfusion
 import json
 import time
 import tempfile
@@ -1902,6 +1903,303 @@ def import_image(body: ImportFileRequest):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copy2(src, dest)
     return {"ok": True, "filename": dest_name, "path": dest}
+
+
+# ===== TIGFUSION (унікалізація відео батчем) =====
+
+class TigfusionRequest(BaseModel):
+    files: list[str]            # абсолютні шляхи до відео
+    output_dir: str             # куди зберігати копії
+    prefix: str = ""            # префікс імені файлу
+    start_num: int = 1          # перший порядковий номер
+    copies: int = 1             # копій на кожне відео
+    threshold: float = 8.0      # поріг Smart Detector (нижче → перерендер)
+
+
+_tig_state: dict = {"running": False, "done": True, "result": None,
+                    "error": None, "progress": 0, "total": 0, "current": ""}
+_tig_lock = threading.Lock()
+_tig_cancel = threading.Event()  # сигнал зупинки для активного батчу
+
+
+def _tig_run(req: TigfusionRequest):
+    def cb(done, total, current):
+        with _tig_lock:
+            _tig_state["progress"] = done
+            _tig_state["total"] = total
+            _tig_state["current"] = current
+        if _tig_cancel.is_set():
+            raise InterruptedError("Зупинено користувачем")
+    try:
+        results = tigfusion.process_batch(
+            files=req.files, output_dir=req.output_dir, prefix=req.prefix,
+            start_num=req.start_num, copies=max(1, req.copies),
+            progress_cb=cb, threshold=req.threshold,
+            cancel_check=_tig_cancel.is_set,
+        )
+        with _tig_lock:
+            _tig_state["result"] = results
+            _tig_state["error"] = None if all(r["ok"] for r in results) else \
+                "; ".join(str(r["error"]) for r in results if not r["ok"])
+            _tig_state["done"] = True
+            _tig_state["running"] = False
+    except InterruptedError:
+        with _tig_lock:
+            _tig_state["error"] = "Зупинено користувачем"
+            _tig_state["done"] = True
+            _tig_state["running"] = False
+    except Exception as e:
+        with _tig_lock:
+            _tig_state["error"] = str(e)
+            _tig_state["done"] = True
+            _tig_state["running"] = False
+    finally:
+        _tig_cancel.clear()
+
+
+@app.post("/tigfusion/run")
+def tigfusion_run(body: TigfusionRequest):
+    """Запускає батч-унікалізацію у фоновому потоці."""
+    if not body.files:
+        return {"ok": False, "error": "Порожній список файлів"}
+    with _tig_lock:
+        if _tig_state["running"]:
+            return {"ok": False, "error": "TIGFUSION вже працює, дочекайся завершення або натисни СТОП"}
+        _tig_state.update(running=True, done=False, result=None, error=None,
+                          progress=0, total=len(body.files) * max(1, body.copies),
+                          current="")
+    _tig_cancel.clear()
+    t = threading.Thread(target=_tig_run, args=(body,), daemon=True)
+    t.start()
+    return {"ok": True, "started": True, "total": _tig_state["total"]}
+
+
+@app.post("/tigfusion/stop")
+def tigfusion_stop():
+    """М'яка зупинка активного батчу: після поточного файлу рендер припиняється."""
+    with _tig_lock:
+        if not _tig_state["running"]:
+            return {"ok": True, "stopped": False, "message": "Нічого зупиняти — процес не активний"}
+        _tig_cancel.set()
+    return {"ok": True, "stopped": True}
+
+
+@app.get("/tigfusion/status")
+def tigfusion_status():
+    with _tig_lock:
+        return {"ok": True, **_tig_state}
+
+
+@app.get("/tigfusion/check-ffmpeg")
+def tigfusion_check():
+    try:
+        ff, fp = tigfusion.find_binaries()
+        return {"ok": True, "ffmpeg": ff, "ffprobe": fp}
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/tigfusion/list-dir")
+def tigfusion_list_dir(path: str = ""):
+    """Список mp4 у папці (для вибору 'звідки завантажити')."""
+    import glob
+    if not os.path.isdir(path):
+        return {"ok": False, "error": f"Папка не знайдено: {path}", "files": []}
+    files = sorted(glob.glob(os.path.join(path, "*.mp4")) +
+                   glob.glob(os.path.join(path, "*.mov")) +
+                   glob.glob(os.path.join(path, "*.avi")) +
+                   glob.glob(os.path.join(path, "*.mkv")))
+    return {"ok": True, "files": files, "count": len(files)}
+
+
+# ===== LAN SHARE: роздача папки по мережі для телефонів =====
+
+_share_state: dict = {"running": False, "port": 0, "dir": "", "error": None, "server": None}
+_share_lock = threading.Lock()
+
+
+def _get_local_ip():
+    """Локальна IP-адреса ПК у LAN."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except OSError:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+
+class ShareStartRequest(BaseModel):
+    folder: str
+    port: int = 8000
+
+
+@app.post("/share/start")
+def share_start(body: ShareStartRequest):
+    """Запускає HTTP-сервер на 0.0.0.0:port, що роздає folder усій LAN."""
+    import uvicorn
+    from fastapi import FastAPI as _App
+    if not os.path.isdir(body.folder):
+        return {"ok": False, "error": f"Папка не знайдено: {body.folder}"}
+    with _share_lock:
+        if _share_state["running"]:
+            return {"ok": False, "error": f"Сервер вже працює на порту {_share_state['port']} — спершу зупини"}
+        try:
+            app_share = FastAPI(title="LAN Share")
+
+            @app_share.get("/health")
+            def _health():
+                return {"status": "ok"}
+
+            # /files/<шлях> — файл напряму; /browse — HTML-список для телефону
+            from fastapi.responses import HTMLResponse, FileResponse
+            from urllib.parse import quote
+
+            @app_share.get("/browse")
+            def _browse():
+                import glob as _g
+                rows = []
+                for ext in ("*.mp4", "*.mov", "*.avi", "*.mkv"):
+                    for f in sorted(_g.glob(os.path.join(body.folder, ext))):
+                        name = os.path.basename(f)
+                        size_mb = os.path.getsize(f) / 1024 / 1024
+                        rows.append(
+                            f'<li><a href="/files/{name}">{name}</a> '
+                            f'<small style="color:#888">{size_mb:.1f} MB</small></li>')
+                zip_link = (
+                    '<div style="margin:14px 0;padding:12px;background:#1b3a1b;border-radius:8px">'
+                    '<b style="color:#8bc34a">📦 Завантажити все одним архівом:</b><br>'
+                    '<a href="/download-zip" style="color:#7ec8e3;font-size:16px">'
+                    f'{_ZIP_PROGRESS.get("zip_label", "спершу створи архів на ПК")}</a>'
+                    '</div>'
+                ) if os.path.isfile(_ZIP_PROGRESS.get("ready", "")) else (
+                    '<div style="margin:14px 0;color:#888;font-size:14px">'
+                    '💡 Хочеш завантажити все одним файлом? Створи архів кнопкою на ПК.</div>'
+                )
+                html = ("<!doctype html><meta charset='utf-8'>"
+                        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                        "<title>Reels Generator — файлосервер</title>"
+                        f"{zip_link}"
+                        f"<h2 style='font-family:sans-serif'>Відео ({len(rows)})</h2><ul>{''.join(rows)}</ul>")
+                return HTMLResponse(html)
+
+            @app_share.get("/files/{name}")
+            def _file(name: str):
+                safe = os.path.basename(name)  # без traversal
+                p = os.path.join(body.folder, safe)
+                if not os.path.isfile(p):
+                    return {"error": "not found"}
+                return FileResponse(p, filename=safe)
+
+            @app_share.get("/download-zip")
+            def _dl_zip():
+                p = _ZIP_PROGRESS.get("ready")
+                if not p or not os.path.isfile(p):
+                    return {"error": "zip ще не готовий"}
+                return FileResponse(p, filename=os.path.basename(p), media_type="application/zip")
+
+            config = uvicorn.Config(app_share, host="0.0.0.0", port=body.port, log_level="error")
+            server = uvicorn.Server(config)
+            th = threading.Thread(target=server.run, daemon=True)
+            th.start()
+            _share_state.update(running=True, port=body.port, folder=body.folder, error=None, server=server)
+            return {"ok": True, "port": body.port, "folder": body.folder}
+        except Exception as e:
+            _share_state.update(running=False, error=str(e))
+            return {"ok": False, "error": str(e)}
+
+
+@app.post("/share/stop")
+def share_stop():
+    with _share_lock:
+        server = _share_state.get("server")
+        if not _share_state["running"] or not server:
+            return {"ok": True, "stopped": False, "message": "Сервер не працює"}
+        try:
+            server.should_exit = True
+        except Exception as e:
+            _share_state["error"] = str(e)
+        _share_state.update(running=False, port=0, server=None)
+    return {"ok": True, "stopped": True}
+
+
+def _zip_folder(folder: str, zip_path: str, progress: dict):
+    """Стрімінгова архівація папки в zip (без завантаження всього в пам'ять)."""
+    import zipfile, glob as _g
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:  # STORED: відео не стискається, швидко
+        files = []
+        for ext in ("*.mp4", "*.mov", "*.avi", "*.mkv"):
+            files.extend(_g.glob(os.path.join(folder, ext)))
+        total = len(files)
+        for i, f in enumerate(sorted(files), 1):
+            zf.write(f, os.path.basename(f))
+            progress["done"] = i
+            progress["total"] = total
+
+
+@app.post("/share/zip")
+def share_zip():
+    """Створює zip-архів усієї роздаваної папки (у temp). Прогрес через /share/zip-status."""
+    with _share_lock:
+        folder = _share_state.get("folder")
+        if not _share_state["running"] or not folder:
+            return {"ok": False, "error": "Сервер не працює — спершу запусти роздачу"}
+        port = _share_state["port"]
+    try:
+        os.makedirs("C:/Users/User/AppData/Local/Temp/reels_share", exist_ok=True)
+        zip_name = "reels_" + os.path.basename(folder.rstrip("/\\")).replace(" ", "_") + ".zip"
+        zip_path = os.path.join("C:/Users/User/AppData/Local/Temp/reels_share", zip_name)
+        _ZIP_PROGRESS.clear()
+        _ZIP_PROGRESS.update({"done": 0, "total": 0})
+        _zip_folder(folder, zip_path, _ZIP_PROGRESS)
+        size_mb = os.path.getsize(zip_path) / 1024 / 1024
+        _ZIP_PROGRESS["ready"] = zip_path
+        _ZIP_PROGRESS["size_mb"] = round(size_mb, 1)
+        _ZIP_PROGRESS["zip_label"] = f"⬇ {zip_name} ({round(size_mb, 1)} MB)"
+        return {"ok": True, "zip_name": zip_path, "size_mb": round(size_mb, 1)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+_ZIP_PROGRESS: dict = {}
+
+
+@app.get("/share/zip-status")
+def share_zip_status():
+    return {"ok": True, **_ZIP_PROGRESS}
+
+
+@app.get("/share/download-zip")
+def share_download_zip():
+    """Віддає готовий zip на скачування."""
+    from fastapi.responses import FileResponse
+    p = _ZIP_PROGRESS.get("ready")
+    if not p or not os.path.isfile(p):
+        return {"error": "zip ще не готовий"}
+    return FileResponse(p, filename=os.path.basename(p), media_type="application/zip")
+
+
+@app.get("/share/status")
+def share_status():
+    with _share_lock:
+        return {"ok": True, **{k: v for k, v in _share_state.items() if k != "server"}}
+
+
+@app.get("/share/local-ip")
+def share_local_ip():
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except OSError:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return {"ok": True, "ip": ip}
 
 
 # ===== ENTRY POINT =====
