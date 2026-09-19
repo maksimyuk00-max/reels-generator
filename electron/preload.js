@@ -165,8 +165,8 @@ contextBridge.exposeInMainWorld('api', {
   sync: {
     status:      (repoPath)    => ipcRenderer.invoke('sync:status', repoPath),
     deploy:      (payload)     => ipcRenderer.invoke('sync:deploy', payload),
-    pull:        (repoPath)    => ipcRenderer.invoke('sync:pull', repoPath),
-    saveRepoPath:(repoPath)    => ipcRenderer.invoke('sync:saveRepoPath', repoPath),
+    pull:        (payload)     => ipcRenderer.invoke('sync:pull', payload),
+    saveRepoPath:(payload)     => ipcRenderer.invoke('sync:saveRepoPath', payload),
   },
   // Threads scheduler / plan
   threadsPlan: {

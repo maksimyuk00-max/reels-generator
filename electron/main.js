@@ -802,33 +802,52 @@ ipcMain.handle('share:localIp', () =>
 )
 // ===== Синхронізація з GitHub (сторінка /sync) =====
 const syncLib = require('./sync')
+const hermesSync = require('./hermes-sync')
 
 ipcMain.handle('sync:status', async (_, repoPath) => {
   const settings = await getSettings()
-  return syncLib.getStatus(repoPath, settings?.sync?.devRepoPath)
+  const repo = await syncLib.getStatus(repoPath, settings?.sync?.devRepoPath)
+  const hermes = await hermesSync.status(null, settings?.sync?.hermesHome)
+  return { repo, hermes }
 })
 
 ipcMain.handle('sync:deploy', async (_, payload = {}) => {
   const settings = await getSettings()
+  const results = {}
+  // Код Reels-генератора (комміт + push)
   let dataJson = null
   if (payload.posts || payload.personas) {
     dataJson = db.exportSyncData({ posts: !!payload.posts, personas: !!payload.personas })
   }
-  return syncLib.deploy(payload.repoPath, payload.message, dataJson, settings?.sync?.devRepoPath)
+  results.repo = await syncLib.deploy(payload.repoPath, payload.message, dataJson, settings?.sync?.devRepoPath)
+  // Пам'ять Hermes (skills/memories/config) через hermes-sync
+  if (payload.hermesMemory) {
+    results.hermes = await hermesSync.deploy(null, payload.message, settings?.sync?.hermesHome)
+  }
+  return results
 })
 
-ipcMain.handle('sync:pull', async (_, repoPath) => {
+ipcMain.handle('sync:pull', async (_, payload = {}) => {
   const settings = await getSettings()
-  const result = await syncLib.pull(repoPath, settings?.sync?.devRepoPath)
+  const results = {}
+  // Пам'ять Hermes спершу (щоб код/дані тягнулись уже на свіжій пам'яті)
+  if (payload.hermesMemory) {
+    results.hermes = await hermesSync.pull(null, settings?.sync?.hermesHome)
+  }
+  const result = await syncLib.pull(payload.repoPath, settings?.sync?.devRepoPath)
   // Якщо синк приніс дані — одразу мердж у БД (тільки додавання, без перезапису)
   if (result.ok && result.dataJson) {
     result.merged = db.mergeSyncedData(result.dataJson)
   }
-  return result
+  results.repo = result
+  return results
 })
 
-ipcMain.handle('sync:saveRepoPath', async (_, repoPath) => {
-  await saveSettings({ sync: { devRepoPath: String(repoPath || '').trim() } })
+ipcMain.handle('sync:saveRepoPath', async (_, payload = {}) => {
+  const update = {}
+  if (payload.repoPath !== undefined) update['sync.devRepoPath'] = String(payload.repoPath || '').trim()
+  if (payload.hermesHome !== undefined) update['sync.hermesHome'] = String(payload.hermesHome || '').trim()
+  if (Object.keys(update).length) await saveSettings(update)
   return { ok: true }
 })
 // Вибір кількох окремих файлів (мульти-селект)

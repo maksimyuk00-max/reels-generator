@@ -1,8 +1,9 @@
 {
   "_meta": {
-    "exported_at": "2026-09-19T13:24:03.785Z",
+    "exported_at": "2026-09-19T13:27:18.903Z",
     "app": "reels-generator",
-    "version": 1
+    "version": 1,
+    "note": "auto-union of two machines"
   },
   "scheduled_posts": [],
   "personas": []
