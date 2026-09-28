@@ -54,8 +54,10 @@ contextBridge.exposeInMainWorld('api', {
     parseAccount: (username)                      => ipcRenderer.invoke('python:parseAccount', username),
     parseReels:   (username, accountId, amount)   => ipcRenderer.invoke('python:parseReels', username, accountId, amount),
     downloadReel:  (videoUrl, savePath)           => ipcRenderer.invoke('python:downloadReel', videoUrl, savePath),
+    bulkDownload:  (username, saveDir, amount)    => ipcRenderer.invoke('python:bulkDownload', username, saveDir, amount),
     enrichViews:   (reelIds)                      => ipcRenderer.invoke('python:enrichViews', reelIds),
     extractAudio:  (reelId, videoUrl)             => ipcRenderer.invoke('python:extractAudio', reelId, videoUrl),
+    extractFrames: (videoPath, count)             => ipcRenderer.invoke('python:extractFrames', videoPath, count),
     generateFull:     (params) => ipcRenderer.invoke('python:generateFull', params),
     generateImage:    (params) => ipcRenderer.invoke('python:generateImage', params),
     generateVideo:    (params) => ipcRenderer.invoke('python:generateVideo', params),
@@ -84,7 +86,7 @@ contextBridge.exposeInMainWorld('api', {
     androidDevices:    ()                                         => ipcRenderer.invoke('python:androidDevices'),
     androidStatus:     (serial)                                   => ipcRenderer.invoke('python:androidStatus', serial),
     androidPost:       (videoPath, caption, serial, dryRun, proxy, expectedUsername) => ipcRenderer.invoke('python:androidPost', videoPath, caption, serial, dryRun, proxy, expectedUsername),
-    androidPostV2:     (videoPath, caption, serial, dryRun, proxy, expectedUsername) => ipcRenderer.invoke('python:androidPostV2', videoPath, caption, serial, dryRun, proxy, expectedUsername),
+    androidPostV2:     (videoPath, caption, serial, dryRun, proxy, expectedUsername, coverPath) => ipcRenderer.invoke('python:androidPostV2', videoPath, caption, serial, dryRun, proxy, expectedUsername, coverPath),
     androidScrollReels: (serial, durationSeconds, likeProbability, proxy, useAi, claudeApiKey, accountId) => ipcRenderer.invoke('python:androidScrollReels', serial, durationSeconds, likeProbability, proxy, useAi, claudeApiKey, accountId),
     scrcpy:     (serial) => ipcRenderer.invoke('android:scrcpy', serial),
     scrcpyStop: ()       => ipcRenderer.invoke('android:scrcpy-stop'),
@@ -137,9 +139,11 @@ contextBridge.exposeInMainWorld('api', {
   schedule: {
     getAll:  ()                                      => ipcRenderer.invoke('schedule:getAll'),
     get:     (id)                                    => ipcRenderer.invoke('schedule:get', id),
-    add:     (videoPath, caption, when, accountId, isDryRun, contentType, imagePathsJson) => ipcRenderer.invoke('schedule:add', videoPath, caption, when, accountId, isDryRun, contentType, imagePathsJson),
+    add:     (videoPath, caption, when, accountId, isDryRun, contentType, imagePathsJson, coverPath) => ipcRenderer.invoke('schedule:add', videoPath, caption, when, accountId, isDryRun, contentType, imagePathsJson, coverPath),
     update:  (id, data)                              => ipcRenderer.invoke('schedule:update', id, data),
     delete:  (id)                                    => ipcRenderer.invoke('schedule:delete', id),
+    publishNow: (videoPath, caption, accountId, contentType, imagePathsJson, coverPath) =>
+      ipcRenderer.invoke('schedule:publishNow', videoPath, caption, accountId, contentType, imagePathsJson, coverPath),
   },
   // Dialog
   dialog: {

@@ -16,6 +16,7 @@ const navItems = [
       { path: '/analytics', label: 'Аналітика', icon: '🎬' },
       { path: '/calendar', label: 'Календар', icon: '📅' },
       { path: '/posting', label: 'Постинг', icon: '📤' },
+      { path: '/bulk-download', label: 'Скачування Reels', icon: '⬇️' },
       { path: '/warmup',  label: 'Прогрів',  icon: '🔥' },
     ],
   },

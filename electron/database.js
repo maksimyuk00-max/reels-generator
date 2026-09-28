@@ -292,6 +292,10 @@ function initSchema() {
     // Для post/carousel: JSON array зі шляхами до фото (для carousel — всі слайди)
     db.exec("ALTER TABLE scheduled_posts ADD COLUMN image_paths_json TEXT DEFAULT ''")
   }
+  if (!schedCols.includes('cover_path')) {
+    // Прев'ю-картинка (jpg/png) для кастомної обкладинки Reels
+    db.exec("ALTER TABLE scheduled_posts ADD COLUMN cover_path TEXT DEFAULT ''")
+  }
 
   // Migrations: accounts — device_id для multi-device
   const accCols = db.prepare("PRAGMA table_info(accounts)").all().map(c => c.name)
@@ -556,19 +560,19 @@ function getScheduledPost(id) {
 }
 
 function addScheduledPost(videoPath, caption, scheduledAt, accountId = null, isDryRun = false,
-                           contentType = 'reel', imagePathsJson = '') {
+                           contentType = 'reel', imagePathsJson = '', coverPath = '') {
   const result = getDb().prepare(`
     INSERT INTO scheduled_posts (video_path, caption, scheduled_at, account_id, is_dry_run,
-      content_type, image_paths_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      content_type, image_paths_json, cover_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(videoPath || '', caption, scheduledAt, accountId, isDryRun ? 1 : 0,
-    contentType || 'reel', imagePathsJson || '')
+    contentType || 'reel', imagePathsJson || '', coverPath || '')
   return getScheduledPost(result.lastInsertRowid)
 }
 
 function updateScheduledPost(id, data) {
   const allowed = ['video_path', 'caption', 'scheduled_at', 'account_id', 'status', 'is_dry_run',
-                    'content_type', 'image_paths_json']
+                    'content_type', 'image_paths_json', 'cover_path']
   const fields = []
   const values = []
   for (const [key, val] of Object.entries(data)) {

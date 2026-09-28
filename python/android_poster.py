@@ -602,6 +602,7 @@ def scroll_reels(
     use_ai: bool = False,
     claude_api_key: str = "",
     niche: dict | None = None,
+    expected_username: str | None = None,  # активний IG акаунт має бути = цим
 ) -> dict:
     """
     Open Instagram Reels and scroll like a real person.
@@ -668,6 +669,17 @@ def scroll_reels(
         _pause(0.5, 1.2)
         d.app_start(IG_PKG, use_monkey=True)
         _pause(3.5, 5.5)
+
+        # ── 1.5. Ніжна перевірка активного акаунта (2026-09-20) ────────
+        # Перед прогрівом переконуємось що активний IG акаунт = той, для якого
+        # заплановано прогрів. Заходимо на Profile (1 тап, без світчера),
+        # читаємо username. Якщо не той — ТОДІ перемикаємось через світчер.
+        # Якщо потрібного немає на пристрої — помилка, щоб не гріти чужий.
+        if expected_username:
+            ok_acc, acc_msg = _ensure_ig_account(d, expected_username)
+            if not ok_acc:
+                return {"ok": False, "error": f"Account check: {acc_msg}"}
+            _pause(0.5, 1.0)
 
         # ── 2. Navigate to Reels tab ───────────────────────────────────
         # Try dedicated Reels tab first
@@ -1198,9 +1210,10 @@ def get_all_ig_accounts(serial: str | None = None) -> dict:
 
         # Крок 3: кілька спроб відкрити account switcher
         # Sheet markers щоб переконатись що він реально відкрився:
-        sheet_markers = ["Add account", "Log in to existing account",
+        sheet_markers = ["Add Instagram account", "Go to Accounts Center",
+                         "Add account", "Log in to existing account",
                          "Створити новий", "Увійти до існуючого",
-                         "Switch accounts"]
+                         "Switch accounts", "Switch Account"]
 
         def sheet_is_open():
             try:
@@ -1245,7 +1258,12 @@ def get_all_ig_accounts(serial: str | None = None) -> dict:
             except Exception:
                 pass
 
-        # Крок 4: парс
+        # Крок 4: парс — ЗАВЖДИ, незалежно від тендітних текстових маркерів світчера.
+        # (2026-09-20) Раніше парс ішов лише `if switcher_opened:` — а той прапорець
+        # виставлявся по мовозалежних рядках "Add account/Створити новий/...".
+        # На Redmi світчер відкривався, але жоден маркер не співпав → парс пропускався
+        # і повертався тільки active. Тепер думпуємо й парсимо ієрархію завжди:
+        # якщо відкрито світчер — зберемо всі; якщо ні — буде тільки active.
         accounts_found = {active_username.lower()}
         debug_hits = []
 
@@ -1261,36 +1279,37 @@ def get_all_ig_accounts(serial: str | None = None) -> dict:
             'profile','bio','link','accounts','login','сторінки','профіль',
         }
 
-        if switcher_opened:
-            try:
-                hierarchy = d.dump_hierarchy()
+        try:
+            hierarchy = d.dump_hierarchy()
 
-                # Парсимо тільки текст що ВИГЛЯДАЄ як username:
-                # Має бути РІВНО lowercase у оригіналі (не full name)
-                # і матчити regex
-                node_pattern = re.compile(r'<node[^>]*text="([^"]+)"', re.IGNORECASE)
+            # Парсимо тільки текст що ВИГЛЯДАЄ як username:
+            # Має бути РІВНО lowercase у оригіналі (не full name)
+            # і матчити regex
+            node_pattern = re.compile(r'<node[^>]*text="([^"]+)"', re.IGNORECASE)
 
-                for m in node_pattern.finditer(hierarchy):
-                    text = m.group(1).strip().lstrip('@')
-                    if not text or len(text) < 3 or len(text) > 30:
-                        continue
-                    # КРИТИЧНО: original text має бути lowercase (без Full Name)
-                    if text != text.lower():
-                        continue
-                    if text in blacklist:
-                        continue
-                    if not username_re.match(text):
-                        continue
-                    if text.isdigit():
-                        continue
-                    # Ще фільтр: real usernames мають '.', '_' АБО довжину 5+
-                    if '.' not in text and '_' not in text and len(text) < 5:
-                        continue
-                    accounts_found.add(text)
-                    debug_hits.append(text)
-            except Exception as e:
-                print(f"[ig-accounts] dump fail: {e}", flush=True)
-        # Якщо switcher не відкрився — повертаємо тільки active (не гадаємо)
+            for m in node_pattern.finditer(hierarchy):
+                text = m.group(1).strip().lstrip('@')
+                if not text or len(text) < 3 or len(text) > 30:
+                    continue
+                # КРИТИЧНО: original text має бути lowercase (без Full Name)
+                if text != text.lower():
+                    continue
+                if text in blacklist:
+                    continue
+                if not username_re.match(text):
+                    continue
+                if text.isdigit():
+                    continue
+                # УМОВУ ПРИБРАНО (2026-09-20): раніше тут стояло
+                #   if '.' not in text and '_' not in text and len(text) < 5: continue
+                # що викидало КОРОТКІ username без крапок/підкреслень (помилка —
+                # юзер втрачав другий акаунт на Redmi). Тепер ловимо всі, хто
+                # схожий на username. Full Name і раніше відсіюється умовою
+                # `text != text.lower()` вище, тож це не ловить імена.
+                accounts_found.add(text)
+                debug_hits.append(text)
+        except Exception as e:
+            print(f"[ig-accounts] dump fail: {e}", flush=True)
 
         # Закриваємо sheet
         try:
@@ -1311,6 +1330,281 @@ def get_all_ig_accounts(serial: str | None = None) -> dict:
 
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _read_active_username_profile(d) -> str | None:
+    """Side-trip на Profile tab щоб прочитати username.
+    Додано очікування (retry), щоб не вилітати занадто швидко.
+    """
+    import re
+    
+    # 1. Чекаємо на Profile tab (до 10 секунд)
+    tab = None
+    for _ in range(5):
+        try:
+            el = d(resourceId=f"{IG_PKG}:id/profile_tab")
+            if el.exists:
+                tab = el
+                break
+        except Exception:
+            pass
+        time.sleep(2)
+    
+    if not tab:
+        return None
+        
+    try:
+        tab.click()
+    except Exception:
+        return None
+
+    # 2. Чекаємо на завантаження профілю (action_bar_title)
+    username = None
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        time.sleep(1.0)
+        try:
+            # Перевіряємо всі можливі селектори
+            title_selectors = [
+                f"{IG_PKG}:id/action_bar_title",
+                f"{IG_PKG}:id/action_bar_large_title",
+                f"{IG_PKG}:id/action_bar_large_title_auto_size",
+                f"{IG_PKG}:id/title",
+            ]
+            for rid in title_selectors:
+                el = d(resourceId=rid)
+                if el.exists:
+                    t_text = (el.get_text() or "").strip().lstrip("@").lower()
+                    if re.match(r'^[a-z0-9._]{1,30}$', t_text):
+                        username = t_text
+                        break
+            if username: break
+        except Exception:
+            continue
+
+    # 3. Повертаємось на Home
+    try:
+        home_tab = d(resourceId=f"{IG_PKG}:id/feed_tab")
+        if home_tab.exists:
+            home_tab.click()
+            time.sleep(1.0)
+    except Exception:
+        pass
+
+    return username
+
+
+
+def _open_account_switcher(d) -> bool:
+    """Відкриває account switcher bottom-sheet (на Profile) і перевіряє що
+    він реально відкрився. Повертає bool.
+
+    КРИТИЧНО (2026-09-21): перед відкриттям світчера ми МОЖЕМО бути НЕ на
+    Profile — _read_active_username_profile у кінці повертає на Home
+    (feed_tab). На Home немає action_bar_title, тому світчер не відкриється.
+    Отже СПЕРШУ гарантуємо, що ми на Profile (тап profile_tab + чекаємо
+    profile_header_container), і лише тоді шукаємо action_bar_title.
+    """
+    sheet_markers = ["Add Instagram account", "Go to Accounts Center",
+                     "Add account", "Log in to existing account",
+                     "Створити новий", "Увійти до існуючого",
+                     "Switch accounts", "Switch Account"]
+
+    def _sheet_is_open():
+        try:
+            hier = d.dump_hierarchy()
+            return any(m in hier for m in sheet_markers)
+        except Exception:
+            return False
+
+    # ── Крок 0: гарантуємо що ми на Profile ─────────────────────
+    on_profile = False
+    try:
+        tab = d(resourceId=f"{IG_PKG}:id/profile_tab")
+        if not tab.exists:
+            return False
+        tab.click()
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            time.sleep(0.6)
+            try:
+                if d(resourceId=f"{IG_PKG}:id/profile_header_container").exists:
+                    on_profile = True
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    if not on_profile:
+        return False
+
+    # ── Спроба 1: тап на title ──────────────────────────────────
+    try:
+        title = d(resourceId=f"{IG_PKG}:id/action_bar_title")
+        if title.exists:
+            title.click()
+            time.sleep(1.8)
+            if _sheet_is_open():
+                return True
+    except Exception:
+        pass
+
+    # ── Спроба 2: тап на chevron праворуч від title ─────────────
+    try:
+        title = d(resourceId=f"{IG_PKG}:id/action_bar_title")
+        if title.exists:
+            b = title.info.get('bounds', {})
+            if b:
+                d.click(b['right'] + 40, (b['top'] + b['bottom']) // 2)
+                time.sleep(1.8)
+                if _sheet_is_open():
+                    return True
+    except Exception:
+        pass
+
+    # ── Спроба 3: тап на title ще раз (після короткої паузи) ──
+    time.sleep(0.8)
+    try:
+        title = d(resourceId=f"{IG_PKG}:id/action_bar_title")
+        if title.exists:
+            title.click()
+            time.sleep(1.8)
+            if _sheet_is_open():
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _switch_ig_account(d, target_username: str) -> tuple[bool, str]:
+    """Переключає активний IG акаунт на target через світчер.
+
+    Використовується ТІЛЬКИ коли активний акаунт НЕ співпадає з target
+    (тобто ніжний шлях _read_active_username_profile вже визначив, що
+    треба перемикатись). Повертає (ok, info_message).
+
+    КЛЮЧОВА пастка (2026-09-21, виявлено живим тестом на Redmi):
+    текст ``kirtas867`` у світчері — це `clickable="false"` вузол, клік по
+    text НЕ лендиться. Клікабельний рядок акаунта має `content-desc="..."`,
+    `clickable="true"`. Отже шукаємо по `description` (content-desc), а text
+    тільки як fallback. Description — такий самий accessibility-атрибут,
+    НЕ координати, однаковий на всіх телефонах.
+    """
+    import re
+    target = target_username.strip().lstrip('@').lower()
+
+    opened = _open_account_switcher(d)
+    if not opened:
+        return False, "switcher not opened"
+
+    # Шукаємо клікабельний рядок з target у bottom-sheet.
+    # Спершу по description (content-desc рядка = username) — надійно,
+    # бо цей вузол clickable=true. Тільки fallback на text.
+    found_row = None
+    for variant in (target, f"@{target}"):
+        try:
+            el = d(description=variant)
+            if el.exists:
+                found_row = el
+                break
+        except Exception:
+            continue
+    if not found_row:
+        try:
+            el = d(descriptionContains=target)
+            if el.exists:
+                found_row = el
+        except Exception:
+            pass
+    # Fallback на text (старі версії IG показували username в text-вузлі)
+    if not found_row:
+        for variant in (target, f"@{target}"):
+            try:
+                el = d(text=variant)
+                if el.exists:
+                    found_row = el
+                    break
+            except Exception:
+                continue
+    if not found_row:
+        try:
+            el = d(textContains=target)
+            if el.exists:
+                found_row = el
+        except Exception:
+            pass
+
+    if not found_row:
+        try:
+            d.press("back")
+            time.sleep(0.5)
+        except Exception:
+            pass
+        return False, f"account @{target} not found in switcher (not logged in?)"
+
+    try:
+        # Клікаємо центр bounds — навіть якщо вузол text неклікабельний,
+        # його центр лежить у клікабельному рядку нижче.
+        if found_row.exists:
+            b = found_row.info.get('bounds', {})
+            if b.get('left') is not None:
+                cx = (b['left'] + b['right']) // 2
+                cy = (b['top'] + b['bottom']) // 2
+                d.click(cx, cy)
+            else:
+                found_row.click()
+        else:
+            found_row.click()
+    except Exception as e:
+        return False, f"row click: {e}"
+
+    time.sleep(3.0)
+
+    # Verify — активний тепер = target?
+    new_active = _read_active_username_profile(d)
+    if new_active == target:
+        return True, f"switched to @{target}"
+    return False, f"switch happened but active is @{new_active} (expected @{target})"
+
+
+def _ensure_ig_account(d, expected_username: str | None = None) -> tuple[bool, str]:
+    """НІЖНА перевірка активного IG акаунта перед прогрівом.
+    Додано retry-цикл (до 3 спроб), щоб дати Instagram час завантажитись.
+    """
+    if not expected_username:
+        return True, "no expected account — skip check"
+
+    expected = expected_username.strip().lstrip('@').lower()
+    
+    for attempt in range(1, 4):
+        try:
+            # Спроба прочитати активного юзера
+            active = _read_active_username_profile(d)
+            
+            if active == expected:
+                return True, f"active already @{expected} — no switch needed"
+
+            # Активний = інший, АБО не зчитався (active is None; акаунт зараз
+            # не активний на фізичному телефоні, або профіль ще не прогрузився).
+            # В обох випадках перемикаємось через світчер на expected замість
+            # того, щоб падати. (Фікс 2026-09-21: раніше active is None просто
+            # ретраїв читання 3 рази і падав, навіть коли акаунт був на пристрої.)
+            ok, msg = _switch_ig_account(d, expected)
+            if ok:
+                return True, f"switched @{active if active else '?'} -> @{expected}"
+            else:
+                # Якщо світчер не спрацював, пробуємо ще раз (можливо UI не прогрузився)
+                print(f"[ensure_ig] attempt {attempt} switch failed: {msg}")
+
+        except Exception as e:
+            print(f"[ensure_ig] attempt {attempt} exception: {e}")
+        
+        if attempt < 3:
+            time.sleep(3) # Пауза між спробами
+            
+    return False, f"Failed to verify or switch to @{expected} after 3 attempts"
+
 
 
 def get_active_ig_account(serial: str | None = None) -> dict:
@@ -1667,3 +1961,4 @@ def ensure_wifi_connection(saved_host: str | None, allow_usb_recovery: bool = Tr
     # Всі шляхи вичерпано
     return {"ok": False, "need_usb": True,
             "error": "Wi-Fi ADB недоступний. Підключи телефон по USB на 5 сек — система відновить автоматично."}
+

@@ -46,6 +46,7 @@ def run_warmup_session(
     session_id: int | None = None,     # id у БД для прямого запису результату
     db_path: str | None = None,        # шлях до SQLite (з Electron)
     engine: str = 'v2',                 # для db.engine field
+    expected_username: str | None = None,  # активний IG акаунт має бути = цим
 ) -> dict:
     """Запустити повну warmup сесію з mixed actions.
 
@@ -171,7 +172,52 @@ def run_warmup_session(
         except Exception as e:
             log(f"app_start warn: {e}")
 
-        time.sleep(3.5)  # splash + feed load
+        time.sleep(6.0)  # splash + feed load (збільшено з 3.5с: на слабких телефонах
+                        # профіль/feed не встигали прогрузитись, даючи фальшивий
+                        # "could not read active IG account")
+
+        # ── 2.5. Ніжна перевірка активного акаунта (2026-09-20) ────────
+        # Перед прогрівом переконуємось що активний IG акаунт = той, для якого
+        # заплановано прогрів. Profile tab (1 тап, без світчера) → читаємо
+        # username. Якщо не той — перемикаємось через світчер. Якщо потрібного
+        # немає на пристрої — помилка, щоб не гріти чужий акаунт.
+        if expected_username:
+            try:
+                from android_poster import _ensure_ig_account
+                log(f"STRICT CHECK: Target account is @{expected_username}")
+                ok_acc, acc_msg = _ensure_ig_account(d, expected_username)
+                log(f"STRICT CHECK RESULT: {acc_msg}")
+                if not ok_acc:
+                    log(f"CRITICAL ERROR: Account mismatch! Expected @{expected_username}, but {acc_msg}. Aborting to prevent wrong account warmup.")
+                    return {"ok": False, "error": f"Account mismatch: {acc_msg}"}
+            except Exception as e:
+                log(f"STRICT CHECK EXCEPTION: {e}")
+                return {"ok": False, "error": f"Account check failed: {e}"}
+
+            # GUARANTEE: Return to Home Feed after account check/switch.
+            try:
+                from android_poster import IG_PKG
+                home_tab = d(resourceId=f"{IG_PKG}:id/feed_tab")
+                if home_tab.exists:
+                    home_tab.click()
+                    time.sleep(2.0)
+                    log("Returned to home feed for session start")
+            except Exception as e:
+                log(f"Return home warn: {e}")
+
+
+            # КРИТИЧНО: Після перевірки/перемикання акаунта ми можемо бути на екрані Профілю.
+            # Оркестратор очікує старт з HOME_FEED. Повертаємось на головну.
+            try:
+                from android_poster import IG_PKG
+                home_tab = d(resourceId=f"{IG_PKG}:id/feed_tab")
+                if home_tab.exists:
+                    home_tab.click()
+                    time.sleep(1.5)
+                    log("returned to home feed after account check")
+            except Exception as e:
+                log(f"return home warn: {e}")
+
 
         # ── 3. Main loop ────────────────────────────────────────
         last_tab_time = time.time()
@@ -458,3 +504,5 @@ def _tab_name(state: ScreenState) -> str | None:
         'PROFILE_OWN': 'profile', 'PROFILE_OTHER': 'profile',
     }
     return m.get(state.type)
+
+

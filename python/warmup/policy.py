@@ -224,9 +224,9 @@ def next_action(state: ScreenState, budget: SessionBudget,
 
     if state.type == 'UNKNOWN':
         memory.unknown_streak += 1
-        if memory.unknown_streak >= 3:
-            return PlannedAction('recover_back',
-                                 reason=f'unknown streak={memory.unknown_streak}')
+        if memory.unknown_streak >= 10:
+            return PlannedAction('goto_home',
+                                 reason=f'unknown streak={memory.unknown_streak} -> force home')
         return PlannedAction('wait',
                              reason=f'unknown #{memory.unknown_streak} — transient')
 

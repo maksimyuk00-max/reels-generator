@@ -18,6 +18,7 @@ import RedditFeed from './pages/RedditFeed'
 import ThreadsContent from './pages/ThreadFeed'
 import iPhoneBridge from './pages/iPhoneBridge'
 import UtmLinks from './pages/UtmLinks'
+import BulkDownload from './pages/BulkDownload'
 import YtcFusion from './pages/YtcFusion'
 import Sync from './pages/Sync'
 
@@ -36,6 +37,7 @@ export default function App() {
         <Route path="/carousel-agent" element={<CarouselAgent />} />
         <Route path="/posting" element={<Posting />} />
         <Route path="/warmup" element={<Warmup />} />
+        <Route path="/bulk-download" element={<BulkDownload />} />
         <Route path="/threads" element={<ThreadsContent />} />
         <Route path="/history" element={<History />} />
         <Route path="/personas" element={<Personas />} />

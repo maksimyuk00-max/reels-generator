@@ -166,7 +166,9 @@ def render_copy(ff, fp, src, dst, plan, creation_time):
         # а файл без "encoder=Lavf61.1.100" виглядає підозріливо (CapCut завжди підписаний).
         # Слід стрімів гасимо -flags:v/a +bitexact, справжній Lavf-тег підмінюємо пост-обробкою.
         "-map_metadata", "-1", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
-        "-movflags", "+use_metadata_tags",  # БЕЗ faststart: CapCut пише mdat спереду (offset 48)
+        "-movflags", "+use_metadata_tags+faststart",  # faststart: moov на початок — інакше IG не може побудувати програвання
+        # (файл з moov у кінці: прев'ю не грузиться, прогрес завантаження стоїть на ~3% і скидається.
+        #  перевірено 2026-09-22: той самий файл з +faststart грузиться без проблем).
         "-metadata", f"creation_time={creation_time}",
         "-metadata", "Hw=1", "-metadata", "bitrate=8000000",
         "-metadata", "maxrate=0", "-metadata", "te_is_reencode=1",
@@ -175,10 +177,24 @@ def render_copy(ff, fp, src, dst, plan, creation_time):
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        # Fallback на CPU (якщо нема NVIDIA GPU) — зі слідом x264-SEI всередині потоку
+        # Fallback на CPU (якщо нема NVIDIA GPU) — зі слідом x264-SEI всередині потоку.
+        # Важливо: nvenc-специфічні прапори ТРЕБА прибрати, інакше libx264 падає
+        # з -22 (Invalid argument). Зокрема "-tune ll" — це NVIDIA-only low-latency
+        # (для libx264 такого значення tune не існує). А "-bf 1" — B-фрейми libx264
+        # підтримує, але з "-tune ll" разом краще не залишати.
         cmd[cmd.index("h264_nvenc")] = "libx264"
-        cmd[cmd.index("-preset")] = "-preset"
-        cmd[cmd.index("p5")] = "medium"
+        try:
+            cmd[cmd.index("-preset")] = "-preset"
+            cmd[cmd.index("p4")] = "medium"
+        except ValueError:
+            pass
+        # Прибрати "-tune ll" (nvenc-only) і "-bf 1"
+        for _ in range(cmd.count("-tune")):
+            i = cmd.index("-tune")
+            del cmd[i:i+2]
+        for _ in range(cmd.count("-bf")):
+            i = cmd.index("-bf")
+            del cmd[i:i+2]
         r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg rc={r.returncode}: {r.stderr[-400:]}")

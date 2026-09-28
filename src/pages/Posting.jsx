@@ -21,6 +21,7 @@ export default function Posting() {
   // Panel state for selected day
   const [videoPath, setVideoPath]     = useState(null)
   const [videoUrl, setVideoUrl]       = useState(null)
+  const [coverPath, setCoverPath]     = useState(null)   // прев'ю-картинка (jpg/png)
   const [caption, setCaption]         = useState('')
   const [hashtags, setHashtags]       = useState('')
   const [generating, setGenerating]   = useState(false)
@@ -206,6 +207,7 @@ export default function Posting() {
   // Reset panel when day changes
   useEffect(() => {
     setVideoPath(null); setVideoUrl(null)
+    setCoverPath(null)
     setVideoContext(null)
     setCaption(''); setHashtags('')
     setMsg(null)
@@ -256,25 +258,49 @@ export default function Posting() {
     })
     if (!path) return
     setVideoPath(path)
-    const filename = path.split(/[/\\]/).pop()
-    setVideoUrl(`http://127.0.0.1:${PYTHON_PORT}/files/${filename}`)
+    // /files/ шукає лише в generations/temp — відео з будь-якої папки віддає
+    // /local-video (інакше сірий екран у прев'ю).
+    setVideoUrl(`http://127.0.0.1:${PYTHON_PORT}/local-video?path=${encodeURIComponent(path)}`)
     setVideoContext(null) // файл без контексту
     setMsg(null)
   }
 
-  // Generate caption + hashtags via Claude CLI
+  // Pick preview/cover image (jpg/png) — буде обкладинкою Reels
+  const handlePickCover = async () => {
+    if (!isElectron) return
+    const path = await window.api.dialog.openFile({
+      title: 'Оберіть прев\'ю (обкладинку)',
+      filters: [{ name: 'Image', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
+    })
+    if (!path) return
+    setCoverPath(path)
+    setMsg(null)
+  }
+
+  // Generate caption + hashtags (Claude CLI або Ollama Cloud — з Settings → Ollama)
   const handleGenerate = async () => {
-    const claudeKey = settings?.claudeApi?.apiKey || ''
     setGenerating(true)
     setMsg(null)
     try {
+      // Vision-контекст: витягуємо 3 кадри відео (початок/середина/кінець).
+      // Для Ollama Cloud gpt-oss кадри використовуються опосередковано —
+      // якщо модель не прийме зображення, бекенд відкине їх і піде по тексту.
+      let framesB64 = []
+      if (videoPath) {
+        try {
+          const fr = await window.api.python.extractFrames(videoPath, 3)
+          if (fr?.ok) framesB64 = fr.frames_b64 || []
+        } catch (_) { /* кадри не критичні — генерація йде по тексту */ }
+      }
       const result = await window.api.python.generateCaption({
         style: videoContext?.style || '',
         custom_text: '',
-        claude_api_key: claudeKey,
+        claude_api_key: settings?.claudeApi?.apiKey || '',
         quote: videoContext?.quote || '',
         image_prompt: videoContext?.image_prompt || '',
         video_prompt: videoContext?.video_prompt || '',
+        frames_b64: framesB64,
+        video_path: videoPath || '',
       })
       if (result.ok) {
         setCaption(result.caption || '')
@@ -288,26 +314,28 @@ export default function Posting() {
     setGenerating(false)
   }
 
-  // Publish now
+  // Publish now — та сама логіка, що й планування: створюємо запис
+  // планувальника з часом +5 секунд. Далі працює звичайний відлагоджений
+  // пайплайн запланованих постів (posting_v2 через телефон). Нічого нового.
   const handlePublish = async () => {
     if (!videoPath) return
     setPublishing(true); setMsg(null)
     try {
       const fullCaption = [caption, hashtags].filter(Boolean).join('\n\n')
-      const expectedUsername = accounts.find(a => a.id === selectedAccountId)?.username || null
-      const result = useAndroid
-        ? await window.api.python.androidPost(videoPath, fullCaption, androidSerial || null, false, settings?.androidProxy || null, expectedUsername)
-        : await window.api.python.publishReel(videoPath, fullCaption)
+      const imagePathsJson = selectedGen?.image_paths_json || ''
+      const result = await window.api.schedule.publishNow(
+        videoPath,
+        fullCaption,
+        selectedAccountId || null,
+        contentType,
+        imagePathsJson,
+        coverPath || null,
+      )
       if (result.ok) {
-        setMsg({
-          type: 'ok',
-          text: useAndroid
-            ? `✅ Опубліковано через Android${result.step ? ` (${result.step})` : ''}`
-            : `✅ Опубліковано! ${result.url}`,
-        })
+        setMsg({ type: 'ok', text: `🚀 Публікація запущена — через 5 секунд піде через телефон (як заплановані пости)` })
         await loadScheduled()
       } else {
-        setMsg({ type: 'err', text: `${result.error}${result.step ? ` [${result.step}]` : ''}` })
+        setMsg({ type: 'err', text: result.error || 'Не вдалось запланувати публікацію' })
       }
     } catch(e) {
       setMsg({ type: 'err', text: String(e) })
@@ -329,6 +357,7 @@ export default function Posting() {
         true, // dry_run
         settings?.androidProxy || null,
         expectedUsername,
+        coverPath || null,
       )
       if (result.ok) {
         setMsg({
@@ -372,7 +401,7 @@ export default function Posting() {
 
       await window.api.schedule.add(
         videoPathArg, fullCaption, when, selectedAccountId,
-        scheduleDryRun, contentType, imagePathsJson,
+        scheduleDryRun, contentType, imagePathsJson, coverPath || null,
       )
       setMsg({
         type: 'ok',
@@ -832,8 +861,7 @@ export default function Posting() {
                             const p = gen.final_path || gen.video_path
                             if (p) {
                               setVideoPath(p)
-                              const fn = p.split(/[/\\]/).pop()
-                              setVideoUrl(`http://127.0.0.1:${PYTHON_PORT}/files/${fn}`)
+                              setVideoUrl(`http://127.0.0.1:${PYTHON_PORT}/local-video?path=${encodeURIComponent(p)}`)
                               // Зберігаємо контекст для генерації релевантного підпису
                               setVideoContext({
                                 quote: gen.quote || '',
@@ -866,9 +894,22 @@ export default function Posting() {
                     {videoUrl && (
                       <video src={videoUrl} controls loop style={{ width: '100%', maxHeight: 300, borderRadius: 10, background: '#000' }} />
                     )}
-                    <button className="btn-ghost" onClick={() => { setVideoPath(null); setVideoUrl(null); setVideoContext(null) }} style={{ fontSize: 12, marginTop: 4 }}>
-                      ✕ Змінити відео
-                    </button>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <button className="btn-ghost" onClick={() => { setVideoPath(null); setVideoUrl(null); setVideoContext(null); setCoverPath(null) }} style={{ fontSize: 12 }}>
+                        ✕ Змінити відео
+                      </button>
+                      <button className="btn-ghost" onClick={handlePickCover} style={{ fontSize: 12 }}>
+                        🖼 {coverPath ? '✅ Прев\'ю обрано' : 'Обрати прев\'ю (обкладинку)'}
+                      </button>
+                      {coverPath && (
+                        <button className="btn-ghost" onClick={() => setCoverPath(null)} style={{ fontSize: 12 }}>✕ прибрати прев\'ю</button>
+                      )}
+                    </div>
+                    {coverPath && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)' }}>
+                        Прев\'ю: {coverPath.split(/[/\\\\]/).pop()}
+                      </div>
+                    )}
                   </div>
                 )}
 

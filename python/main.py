@@ -62,6 +62,7 @@ def _draft_provider_settings() -> dict:
         "ollama_endpoint": ollama.get("endpoint") or "https://ollama.com",
         "ollama_api_key": ollama.get("apiKey") or "",
         "ollama_model": ollama.get("model") or "gpt-oss:120b",
+        "ollama_vision_model": ollama.get("visionModel") or "",
     }
 import subprocess
 import threading
@@ -223,6 +224,22 @@ def enrich_reels(body: EnrichRequestV2):
 @app.post("/download")
 def download_reel(body: DownloadRequest):
     return instagram.download_reel(body.video_url, body.save_path)
+
+
+class BulkDownloadReelRequest(BaseModel):
+    code: str          # код рілса або повний URL instagram.com/reel/<code>/
+    save_dir: str
+
+
+@app.post("/bulk-download/reel")
+def bulk_download_reel(body: BulkDownloadReelRequest):
+    """Анонімне скачування ОДНОГО рілса за кодом (yt-dlp --impersonate chrome).
+
+    Без sessionid/кукі - Session ID потрібен лише для парсингу списку кодів
+    (GET /reels/{username}). Ця фаза не логіниться взагалі - ban-safe.
+    """
+    from bulk_download import download_reel_anonymous
+    return download_reel_anonymous(body.code, body.save_dir)
 
 
 # ===== REDDIT FEED MONITOR =====
@@ -799,51 +816,121 @@ class GenerateCaptionRequest(BaseModel):
     quote: str = ""
     image_prompt: str = ""
     video_prompt: str = ""
+    # Vision: кадри відео (base64) для моделей, що вміють бачити
+    frames_b64: list = []
+    # Шлях до відео — backend сам витягне транскрипцію (Groq Whisper) + кадри
+    video_path: str = ""
+
+
+def _transcribe_video(video_path: str) -> str:
+    """Транскрибує відео через Groq Whisper (аудіо витягується ffmpeg).
+
+    Повертає текст мовлення або '' при невдачі. Це ГОЛОВНЕ джерело підпису
+    для інтерв'ю/монологів — саме слова несуть зміст, а не кадри.
+    """
+    import base64, subprocess, tempfile, os
+    try:
+        tmp = tempfile.mkdtemp(prefix="rg_trans_")
+        wav = os.path.join(tmp, "audio.wav")
+        r = subprocess.run(
+            ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", video_path,
+             "-ar", "16000", "-ac", "1", "-vn", wav],
+            capture_output=True, text=True, timeout=120)
+        if r.returncode != 0 or not os.path.isfile(wav) or os.path.getsize(wav) < 1000:
+            return ""
+        cfg_path = os.path.join(os.path.expanduser("~"), "golos", "config.json")
+        if not os.path.isfile(cfg_path):
+            # fallback: системний golos config може бути в іншому місці
+            cfg_path = os.path.join(os.path.expanduser("~"), "golos", "config.json")
+        cfg = json.load(open(cfg_path, encoding="utf-8"))
+        key = cfg.get("groq_api_key") or ""
+        if not key:
+            return ""
+        from groq import Groq
+        client = Groq(api_key=key)
+        with open(wav, "rb") as f:
+            data = f.read()
+        out = client.audio.transcriptions.create(
+            model=cfg.get("model", "whisper-large-v3"),
+            file=("audio.mp3", data, "audio/mpeg"))
+        return (out.text or "").strip()
+    except Exception:
+        return ""
 
 
 @app.post("/generate/caption")
 def generate_caption_endpoint(body: GenerateCaptionRequest):
-    """Генерує підпис + хештеги для Instagram Reels через Claude CLI.
+    """Генерує підпис + хештеги для Instagram Reels.
 
-    Якщо передано контекст з відео (quote/style/image_prompt/video_prompt) —
-    Claude робить підпис, який резонує саме з цим відео.
+    Провайдер береться зі settings.json (ollama.provider) — той самий ключ,
+    що й для Reddit/Контенту: 'ollama' (Cloud/local) або 'claude-cli'.
+
+    Підпис будується зі ЗМІСТУ ВІДЕО:
+      1. ГОЛОВНЕ джерело — транскрипція мовлення (Groq Whisper з body.video_path);
+      2. Додатково — візуальний опис кадрів (deepseek-v4.1-flash);
+      3. Стиль/цитата з історії генерації як доповнення.
+    Без реального вмісту відео (ні транскрипції, ні кадрів) — це помилка,
+    а не generic-підпис «в повітря».
     """
-    import subprocess
     import re
-    from generate import _find_claude_cli
 
-    claude_cli = _find_claude_cli()
-    if not claude_cli:
-        return {"ok": False, "error": "Claude CLI не знайдено (claude.exe)"}
+    s = _draft_provider_settings()
 
-    # Збираємо контекст з обраного відео
-    context_lines = []
+    content_sources = []  # реальний вміст відео: транскрипція + кадри
+    context_lines = []    # додатковий текстовий контекст (стиль/цитата/промпт)
+
+    if body.video_path:
+        tr = _transcribe_video(body.video_path)
+        if tr:
+            content_sources.append(
+                f"TRANSCRIPT OF THE SPOKEN CONTENT (this is the MAIN source):\n{tr}")
+        if not tr and not body.frames_b64:
+            return {"ok": False,
+                    "error": "Не вдалось транскрибувати відео — підпис скасовано, аудіо не розпізналось"}
+
+    # Візуальний опис кадрів (якщо передані)
+    if body.frames_b64 and s["provider"] == "ollama":
+        vision_model = s.get("ollama_vision_model") or s.get("ollama_model") or ""
+        described = _describe_frames_with_ollama(
+            frames_b64=body.frames_b64[:3],
+            endpoint=s["ollama_endpoint"],
+            api_key=s["ollama_api_key"],
+            model=vision_model,
+        )
+        if described:
+            content_sources.append(
+                f"VISUAL CONTENT OF THE VIDEO (from frames):\n{described}")
+
+    # Додатковий контекст з історії
     if body.style:
         context_lines.append(f"- Стиль/жанр відео: {body.style}")
     if body.quote:
         context_lines.append(f"- Цитата у відео (видна глядачу): «{body.quote}»")
     if body.image_prompt:
-        # Скорочуємо великі промти (Nano Banana JSON може бути 2KB+)
-        ip = body.image_prompt[:1200]
-        context_lines.append(f"- Візуальний опис кадру: {ip}")
+        context_lines.append(f"- Візуальний опис кадру: {body.image_prompt[:1200]}")
     if body.video_prompt:
-        vp = body.video_prompt[:600]
-        context_lines.append(f"- Опис руху/сцени: {vp}")
+        context_lines.append(f"- Опис руху/сцени: {body.video_prompt[:600]}")
     if body.custom_text:
         context_lines.append(f"- Додаткова інформація від користувача: {body.custom_text}")
 
+    # ПРИНЦИП: підпис тільки з реального вмісту відео.
+    if not content_sources:
+        return {"ok": False, "error": "Оберіть відео — підпис генерується тільки з його вмісту"}
+
+    block_parts = list(content_sources)
     if context_lines:
-        context_block = "CONTEXT OF THIS VIDEO:\n" + "\n".join(context_lines)
-        instruction = (
-            "Write a caption that DIRECTLY reveals or amplifies the meaning of THESE specific frames and the quote. "
-            "Don't write generically — reference imagery from the description, continue the thought of the quote."
-        )
-    else:
-        context_block = ""
-        instruction = "Write a generic motivational caption in a neutral tone."
+        block_parts.append("EXTRA CONTEXT:\n" + "\n".join(context_lines))
+    context_block = "\n\n".join(block_parts)
+
+    instruction = (
+        "Write a caption DIRECTLY inspired by the REAL spoken content and visuals of THIS specific video. "
+        "Continue the thought, reference exactly what is said and shown. Don't write generically or invent "
+        "content not present — stay true to the actual transcript and footage."
+    )
 
     prompt = f"""You are a content manager of an Instagram account with motivational and philosophical content.
 
+CONTENT OF THIS VIDEO:
 {context_block}
 
 TASK: {instruction}
@@ -855,6 +942,41 @@ Response format:
 
 Reply ONLY in JSON format (no markdown, no comments):
 {{"caption": "...", "hashtags": "#tag1 #tag2 #tag3 #tag4"}}"""
+
+    # --- Ollama (Cloud або local) ---
+    if s["provider"] == "ollama":
+        from reddit_monitor import _ollama_raw
+
+        res = _ollama_raw(
+            prompt=prompt,
+            endpoint=s["ollama_endpoint"],
+            api_key=s["ollama_api_key"],
+            model=s["ollama_model"],
+            timeout=180,
+        )
+        if not res.get("ok"):
+            return {"ok": False, "error": res.get("error", "Ollama error")}
+        raw = res.get("reply", "")
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except json.JSONDecodeError:
+            m = re.search(r"\{.*\}", str(raw), re.DOTALL)
+            if not m:
+                return {"ok": False, "error": f"Ollama: не вдалось розпарсити JSON: {str(raw)[:200]}"}
+            data = json.loads(m.group())
+        return {
+            "ok": True,
+            "caption": data.get("caption", ""),
+            "hashtags": data.get("hashtags", ""),
+        }
+
+    # --- Claude CLI (дефолт) ---
+    import subprocess
+    from generate import _find_claude_cli
+
+    claude_cli = _find_claude_cli()
+    if not claude_cli:
+        return {"ok": False, "error": "Claude CLI не знайдено (claude.exe)"}
 
     try:
         result = subprocess.run(
@@ -882,6 +1004,93 @@ Reply ONLY in JSON format (no markdown, no comments):
         return {"ok": False, "error": "Claude CLI timeout (120s)"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def _describe_frames_with_ollama(frames_b64: list, *, endpoint: str, api_key: str, model: str, timeout: int = 240) -> str:
+    """Описує передані кадри відео через Ollama (Cloud або local).
+
+    Vision-модель (model) береться ОКРЕМО від текстової — на хмарі це
+    deepseek-v4.1-flash (gpt-oss картинки не приймає). Якщо vision недоступний —
+    повертає '' і генерація йде по текстовому контексту (промпи/цитата).
+    """
+    import urllib.request
+
+    try:
+        images = [b for b in frames_b64 if b]
+        if not images:
+            return ""
+        if not model:
+            return ""
+        payload = {
+            "model": model,
+            "prompt": "Describe what happens in these video frames: scene, objects, mood, text if visible. 2-3 sentences.",
+            "images": images,
+            "stream": False,
+        }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        req = urllib.request.Request(endpoint.rstrip("/") + "/api/generate",
+                                     data=json.dumps(payload).encode(),
+                                     headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.loads(r.read().decode("utf-8", errors="replace"))
+        desc = (d.get("response") or "").strip()
+        return desc[:1500]
+    except Exception:
+        # Vision не вдався → текстовий контекст все одно достатній
+        return ""
+
+
+class ExtractFramesRequest(BaseModel):
+    video_path: str
+    count: int = 3  # скільки кадрів (початок/середина/кінець)
+
+
+@app.post("/extract-frames")
+def extract_frames_endpoint(body: ExtractFramesRequest):
+    """Витягує рівномірно розподілені кадри з відео → base64 (для vision-контексту)."""
+    import base64
+    import subprocess
+    import tempfile
+
+    src = body.video_path
+    if not src or not os.path.exists(src):
+        return {"ok": False, "error": f"Файл не знайдено: {src}"}
+
+    tmp_dir = tempfile.mkdtemp(prefix="reelsgen_frames_")
+    n = max(1, min(5, body.count))
+
+    # Тривалість відео
+    try:
+        p = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", src],
+            capture_output=True, text=True, timeout=20)
+        duration = float(p.stdout.strip())
+    except Exception:
+        duration = 0.0
+    if duration <= 0:
+        return {"ok": False, "error": "Не вдалось визначити тривалість відео (ffprobe)"}
+
+    # Кадри на 10%/50%/90% (щоб не брати чорні перші/останні кадри монтажу)
+    frames_b64 = []
+    for i in range(n):
+        t = duration * (0.10 + 0.80 * i / max(1, n - 1)) if n > 1 else duration * 0.5
+        out = os.path.join(tmp_dir, f"frame_{i}.jpg")
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", src, "-frames:v", "1",
+                 "-vf", "scale=512:-2", "-q:v", "5", out],
+                capture_output=True, timeout=30, check=True)
+            with open(out, "rb") as f:
+                frames_b64.append(base64.b64encode(f.read()).decode())
+        except Exception as e:
+            print(f"[caption] frame {i} extract failed: {e}")
+
+    if not frames_b64:
+        return {"ok": False, "error": "Не вдалось витягти жодного кадру"}
+    return {"ok": True, "frames_b64": frames_b64, "duration": duration}
 
 
 class PersonaReplyRequest(BaseModel):
@@ -1139,6 +1348,7 @@ class AndroidPostV2Request(BaseModel):
     dry_run: bool = False         # пройти все окрім Share (для тестів)
     db_path: str | None = None    # SQLite для direct write результату (Варіант Б)
     expected_username: str | None = None  # verify active IG account matches
+    cover_path: str | None = None  # прев'ю-картинка (jpg/png) для обкладинки
 
 
 @app.post("/android/post-v2")
@@ -1159,6 +1369,7 @@ def android_post_v2(body: AndroidPostV2Request):
         dry_run=body.dry_run,
         db_path=body.db_path,
         expected_username=body.expected_username,
+        cover_path=body.cover_path,
     )
 
 
@@ -1205,6 +1416,7 @@ class AndroidScrollRequest(BaseModel):
     session_id: int | None = None
     db_path: str | None = None
     engine: str = 'manual'  # manual | v1
+    expected_username: str | None = None  # активний IG акаунт має бути = цим
 
 
 @app.post("/android/scroll-reels")
@@ -1236,6 +1448,7 @@ def android_scroll_reels(body: AndroidScrollRequest):
         use_ai=body.use_ai,
         claude_api_key=body.claude_api_key,
         niche=niche,
+        expected_username=body.expected_username,
     )
 
     # Direct write у БД (Варіант Б) — на випадок якщо Electron timeout'нув pyFetch.
@@ -1283,6 +1496,7 @@ class WarmupV2Request(BaseModel):
     session_id: int | None = None
     db_path: str | None = None
     engine: str = 'v2'
+    expected_username: str | None = None  # активний IG акаунт має бути = цим
 
 
 @app.post("/android/warmup-v2")
@@ -1316,6 +1530,7 @@ def android_warmup_v2(body: WarmupV2Request):
         session_id=body.session_id,
         db_path=body.db_path,
         engine=body.engine,
+        expected_username=body.expected_username,
     )
 
 
@@ -1885,6 +2100,26 @@ def serve_local_audio(path: str):
     media_types = {"mp3": "audio/mpeg", "wav": "audio/wav", "aac": "audio/aac",
                    "m4a": "audio/mp4", "ogg": "audio/ogg", "flac": "audio/flac"}
     return FileResponse(decoded, media_type=media_types.get(ext, "audio/mpeg"))
+
+
+@app.get("/local-video")
+def serve_local_video(path: str):
+    """Serve video file from ANY local path for the Posting preview.
+
+    /files/ шукає лише в temp/generations, тож відео, вибране з Downloads,
+    ніколи не відтворюється (сірий екран). Цей ендпоінт віддає файл напряму.
+    """
+    from fastapi import HTTPException
+    import urllib.parse
+    decoded = urllib.parse.unquote(path)
+    ext = decoded.rsplit(".", 1)[-1].lower() if "." in decoded else ""
+    if ext not in ("mp4", "mov", "avi", "mkv", "webm", "m4v"):
+        raise HTTPException(status_code=403, detail="Only video files allowed")
+    if not os.path.isfile(decoded):
+        raise HTTPException(status_code=404, detail="File not found")
+    media_types = {"mp4": "video/mp4", "mov": "video/quicktime", "avi": "video/x-msvideo",
+                   "mkv": "video/x-matroska", "webm": "video/webm", "m4v": "video/x-m4v"}
+    return FileResponse(decoded, media_type=media_types.get(ext, "video/mp4"))
 
 
 class ImportFileRequest(BaseModel):

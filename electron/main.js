@@ -5,6 +5,7 @@ const { spawn } = require('child_process')
 const http = require('http')
 const db = require('./database')
 const { getSettings, saveSettings } = require('./store')
+const { collectReelsFromDom } = require('./cdp_collect')
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
 const PYTHON_PORT = 8765
@@ -771,6 +772,47 @@ ipcMain.handle('python:downloadReel', (_, videoUrl, savePath) =>
   pyFetch('/download', { method: 'POST', body: { video_url: videoUrl, save_path: savePath } })
 )
 
+// Пакетне скачування рілсів акаунта в обрану папку. ДВОФАЗНИЙ пайплайн:
+// Фаза 1 (DOM через CDP): collectReelsFromDom — читає /reel/<code>/ з DOM
+//   залогіненого Edge (НЕ API — clips/user/feed дають 400/429). ban-safe.
+// Фаза 2 (АНОНІМНО): кожен файл качається через yt-dlp --impersonate chrome
+//   за кодом — БЕЗ sessionid, без кукі (перевірений ban-safe шлях).
+// Пауза 12с між файлами — правило юзера: один запит за раз, 10-15с паузи.
+ipcMain.handle('python:bulkDownload', async (event, username, saveDir, amount = 50) => {
+  let codes
+  try {
+    codes = await collectReelsFromDom(username, { amount })
+  } catch (e) {
+    return { ok: false, error: `Парсинг DOM: ${e.message}` }
+  }
+  if (!codes || !codes.length) {
+    return { ok: false, error: `Не вдалось зчитати рілси з DOM. Переконайся, що Edge запущений з debug-портом 9223 і ти в ньому залогінений на instagram.com.` }
+  }
+
+  const wins = () => BrowserWindow.getAllWindows()
+  const emit = (payload) => { const w = wins(); if (w.length) w[0].webContents.send('bulkdownload:progress', payload) }
+
+  const reels = codes
+  let done = 0, failed = 0
+  for (const code of reels) {
+    // Фаза 2: анонімне скачування через yt-dlp (python/bulk_download.py)
+    const r = await pyFetch('/bulk-download/reel', {
+      method: 'POST',
+      body: { code: code, save_dir: saveDir },
+      timeout: 360000,
+    })
+    done++
+    if (r.ok) {
+      emit({ index: done, total: reels.length, code, ok: true, path: r.path })
+    } else {
+      failed++
+      emit({ index: done, total: reels.length, code, ok: false, error: r.error || 'помилка скачування' })
+    }
+    if (done < reels.length) await new Promise(res => setTimeout(res, 12000))  // 12с — бан-безпечний темп
+  }
+  return { ok: true, total: reels.length, failed }
+})
+
 // ===== TIGFusion — батч-унікалізація відео =====
 ipcMain.handle('tigfusion:run', (_, params) =>
   pyFetch('/tigfusion/run', { method: 'POST', body: params, timeout: 60000 })
@@ -1026,6 +1068,9 @@ ipcMain.handle('python:importImage', (_, filePath) =>
 ipcMain.handle('python:generateCaption', (_, params) =>
   pyFetch('/generate/caption', { method: 'POST', body: params })
 )
+ipcMain.handle('python:extractFrames', (_, videoPath, count) =>
+  pyFetch('/extract-frames', { method: 'POST', body: { video_path: videoPath, count: count || 3 }, timeout: 120000 })
+)
 ipcMain.handle('python:getPrompts', () => pyFetch('/prompts'))
 ipcMain.handle('python:savePrompts', (_, data) => pyFetch('/prompts', { method: 'POST', body: data }))
 ipcMain.handle('python:generatePersonaReply', (_, params) =>
@@ -1151,7 +1196,7 @@ ipcMain.handle('python:androidPost', async (_, videoPath, caption, serial, dryRu
     timeout: 180000,
   }))
 })
-ipcMain.handle('python:androidPostV2', async (_, videoPath, caption, serial, dryRun, proxy, expectedUsername) => {
+ipcMain.handle('python:androidPostV2', async (_, videoPath, caption, serial, dryRun, proxy, expectedUsername, coverPath) => {
   serial = await ensureFreshSerial(serial)
   return runAdbOp(serial, () => pyFetch('/android/post-v2', {
     method: 'POST',
@@ -1159,6 +1204,7 @@ ipcMain.handle('python:androidPostV2', async (_, videoPath, caption, serial, dry
       video_path: videoPath, caption, serial: serial || null,
       dry_run: !!dryRun, proxy: proxy || null,
       expected_username: expectedUsername || null,
+      cover_path: coverPath || null,
     },
     timeout: 300000,
   }))
@@ -1220,8 +1266,11 @@ ipcMain.handle('python:androidScrollReels', async (_, serial, durationSeconds, l
   // Engine з per-account config (default 'v1' якщо є ніша, інакше 'manual')
   let engine = 'manual'
   let niche = { description: '', keywords: [], avoid: [], examples: [] }
+  let expectedUsername = null  // активний IG акаунт має бути = цим (ніжна перевірка)
   if (accountId) {
     try {
+      const acc = db.getAllAccounts().find(a => a.id === accountId)
+      if (acc?.username) expectedUsername = acc.username
       const cfg = db.getWarmupConfig(accountId)
       engine = cfg.warmup_engine || 'manual'
       niche = {
@@ -1268,6 +1317,7 @@ ipcMain.handle('python:androidScrollReels', async (_, serial, durationSeconds, l
           niche_keywords: niche.keywords,
           niche_avoid: niche.avoid,
           niche_examples: niche.examples,
+          expected_username: expectedUsername,
         },
         timeout: (durationSeconds || 120) * 1000 + 120000,
       }))
@@ -1287,6 +1337,7 @@ ipcMain.handle('python:androidScrollReels', async (_, serial, durationSeconds, l
           niche_keywords: useAi ? niche.keywords : [],
           niche_avoid: useAi ? niche.avoid : [],
           niche_examples: useAi ? niche.examples : [],
+          expected_username: expectedUsername,
         },
         timeout: (durationSeconds || 120) * 1000 + 60000,
       }))
@@ -1355,12 +1406,26 @@ ipcMain.handle('python:threadsScrollComment', (_, serial, durationSec, likeProb,
 )
 
 ipcMain.handle('schedule:getAll',    ()                                      => db.getScheduledPosts())
-ipcMain.handle('schedule:get',       (_, id)                                 => db.getScheduledPost(id))
-ipcMain.handle('schedule:add',       (_, videoPath, caption, when, accountId, isDryRun, contentType, imagePathsJson) =>
+ipcMain.handle('schedule:get',     (_, id)                                   => db.getScheduledPost(id))
+ipcMain.handle('schedule:add',       (_, videoPath, caption, when, accountId, isDryRun, contentType, imagePathsJson, coverPath) =>
   db.addScheduledPost(videoPath, caption, when, accountId || null, !!isDryRun,
-    contentType || 'reel', imagePathsJson || ''))
-ipcMain.handle('schedule:update',    (_, id, data)                           => db.updateScheduledPost(id, data))
+    contentType || 'reel', imagePathsJson || '', coverPath || ''))
+ipcMain.handle('schedule:update',    (_, id, data)                          => db.updateScheduledPost(id, data))
 ipcMain.handle('schedule:delete',    (_, id)                                 => db.deleteScheduledPost(id))
+
+// "Опублікувати зараз" = та сама логіка планувальника, просто час = зараз + 5с.
+// Юзер натискає кнопку → через 5 секунд спрацьовує звичайний відлагоджений
+// пайплайн запланованих постів (posting_v2 через телефон). Нічого нового.
+ipcMain.handle('schedule:publishNow', (_, videoPath, caption, accountId, contentType, imagePathsJson, coverPath) => {
+  const when = new Date(Date.now() + 5000)
+  // Формат локального часу "YYYY-MM-DDTHH:mm:ss" — так само, як пише UI при плануванні
+  const pad = (x) => String(x).padStart(2, '0')
+  const whenIso = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}:${pad(when.getSeconds())}`
+  const id = db.addScheduledPost(videoPath, caption, whenIso, accountId || null, false,
+    contentType || 'reel', imagePathsJson || '', coverPath || '')
+  console.log(`[PublishNow] scheduled post #${id} for +5s (${contentType || 'reel'})`)
+  return { ok: true, id, when: whenIso }
+})
 
 // ===== IPC: GENERATIONS HISTORY =====
 
@@ -1541,6 +1606,7 @@ async function runScheduler() {
             db_path: isDryRun ? null : dbPath,
             expected_username: expectedUsername,
             dry_run: isDryRun,
+            cover_path: post.cover_path || null,
           },
           timeout: 180000,
         }))
@@ -1734,8 +1800,11 @@ async function runWarmupScheduler() {
     // Engine з per-account config (default 'manual' якщо немає account_id)
     let engine = 'manual'
     let niche = { description: '', keywords: [], avoid: [], examples: [] }
+    let expectedUsername = null  // активний IG акаунт має бути = цим (ніжна перевірка)
     if (session.account_id) {
       try {
+        const acc = db.getAllAccounts().find(a => a.id === session.account_id)
+        if (acc?.username) expectedUsername = acc.username
         const cfg = db.getWarmupConfig(session.account_id)
         engine = cfg.warmup_engine || 'manual'
         niche = {
@@ -1767,6 +1836,7 @@ async function runWarmupScheduler() {
           session_id: session.id,
           db_path: dbPath,
           engine: 'v2',
+          expected_username: expectedUsername,
         },
         timeout: session.duration_min * 60 * 1000 + 180000,  // +3хв для AI vision
       }))
@@ -1791,6 +1861,7 @@ async function runWarmupScheduler() {
           session_id: session.id,
           db_path: dbPath,
           engine: engine,
+          expected_username: expectedUsername,
         },
         timeout: session.duration_min * 60 * 1000 + 300000,  // +5хв буфер на unlock/dialogs
       }))

@@ -204,24 +204,36 @@ def _find_gallery_item_by_filename(d, filename: str):
     Стратегії:
     1. Content-desc містить filename (інколи так)
     2. Перший видимий item (припускаємо найновіший файл нагорі)
+    З retry: після тапу Create галерея може рендеритись 2-6с (особливо
+    на слабких пристроях / при тиску на пам'ять) — без очікування ловимо
+    race "items ще не в дереві" і фальшиво падаємо з 'media scanner не встиг'.
     """
-    # Стратегія 1: пошук за назвою у descriptions (рідко працює)
-    try:
-        el = d(descriptionContains=filename)
-        if el.exists:
-            return el
-    except Exception:
-        pass
-
-    # Стратегія 2: перший видимий item у галереї (найновіше зверху)
-    for rid in SEL_GALLERY_ITEMS:
+    deadline = time.time() + 12
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        # Стратегія 1: пошук за назвою у descriptions (рідко працює)
         try:
-            items = d(resourceId=rid)
-            if items.exists and items.count > 0:
-                # Перший item — найновіший файл (наш щойно пушнутий)
-                return items[0]
+            el = d(descriptionContains=filename)
+            if el.exists:
+                return el
         except Exception:
-            continue
+            pass
+
+        # Стратегія 2: перший видимий item у галереї (найновіше зверху)
+        for rid in SEL_GALLERY_ITEMS:
+            try:
+                items = d(resourceId=rid)
+                if items.exists and items.count > 0:
+                    # Перший item — найновіший файл (наш щойно пушнутий)
+                    return items[0]
+            except Exception:
+                continue
+
+        # Галерея ще не відрендерилась — чекаємо і пробуємо знову
+        if attempt == 1:
+            log("gallery items not found yet — waiting for render (up to 12s)")
+        time.sleep(1.5)
     return None
 
 
@@ -241,7 +253,7 @@ def _find_gallery_item_by_index(d, idx: int):
     return None
 
 
-def _wait_mediascanner_indexed(d, remote_name: str, timeout_s: int = 15) -> bool:
+def _wait_mediascanner_indexed(d, remote_name: str, timeout_s: int = 25) -> bool:
     """Чекати поки MediaStore проіндексує пушнутий файл.
 
     Broadcast MEDIA_SCANNER_SCAN_FILE на Android 10+ асинхронний і часто
@@ -337,11 +349,11 @@ def _push_video_verified(d, local_path: str, post_id: str | int | None = None) -
             remote_size = 0
 
         if remote_size == local_size:
-            # Media scanner — чекаємо РЕАЛЬНОЇ індексації в MediaStore (до 15с).
+            # Media scanner — чекаємо РЕАЛЬНОЇ індексації в MediaStore (до 25с).
             # Якщо файл НЕ проіндексовано — краще чесно впасти, ніж постити
             # чужий відео з галереї ("останній item").
             if not _wait_mediascanner_indexed(d, remote_name):
-                last_err = (f"media scanner не проіндексував {remote_name} за 15с — "
+                last_err = (f"media scanner не проіндексував {remote_name} за 25с — "
                             f"скасовано щоб не опублікувати не той файл")
                 print(f"[post-v2] {last_err}", flush=True)
                 try: d.shell(f'rm -f "{remote_path}"')
@@ -371,6 +383,177 @@ def _cleanup_remote(d, remote_path: str) -> None:
                 f'-d file://{remote_path}')
     except Exception:
         pass
+
+
+def _push_cover_verified(d, local_path: str, post_id: str | int | None = None) -> dict:
+    """Push прев'ю-картинки (jpg/png) на телефон з verify розміру.
+
+    Аналог _push_video_verified, але для cover-зображення. Картинку кладемо
+    в REMOTE_DIR (DCIM/ReelsGen). IG cover-галерея (Add from camera roll)
+    показує ТІЛЬКИ фото, тож наша пушнута прев'ю буде найновішою картинкою
+    = першим item [0] у тій галереї. Це і є цільова обкладинка.
+    Повертає {"ok": bool, "remote_path": str, "remote_name": str, "error"?: str}.
+    """
+    import re as _re
+    if not os.path.isfile(local_path):
+        return {"ok": False, "error": f"Cover file not found: {local_path}"}
+    local_size = os.path.getsize(local_path)
+    filename = Path(local_path).name
+    suffix = f"_{post_id}_cover" if post_id else f"_{int(time.time())}_cover"
+    stem, ext = os.path.splitext(filename)
+    safe_stem = _re.sub(r'[^a-zA-Z0-9._-]', '_', stem).lower()
+    ext = (ext or _ext_from_image(local_path)).lower()
+
+    last_err = None
+    for attempt in range(1, 3):
+        rname = f"{safe_stem}{suffix}{ext}" if attempt == 1 else f"{safe_stem}{suffix}_try{attempt}{ext}"
+        rpath = f"{REMOTE_DIR}/{rname}"
+        try:
+            d.shell(f"mkdir -p {REMOTE_DIR}")
+            try: d.shell(f'rm -f "{rpath}"')
+            except Exception: pass
+            d.push(local_path, rpath)
+        except Exception as e:
+            last_err = f"push failed (attempt {attempt}): {e}"
+            time.sleep(2)
+            continue
+        # Verify розмір (2 читання)
+        remote_size = None
+        for _ in range(2):
+            try:
+                r = d.shell(f'stat -c %s "{rpath}"').output.strip()
+                if r.isdigit():
+                    remote_size = int(r); break
+            except Exception: pass
+            time.sleep(1)
+        if remote_size is None:
+            remote_size = 0
+        if remote_size == local_size:
+            _wait_cover_indexed(d, rname, timeout_s=20)
+            return {"ok": True, "remote_path": rpath, "remote_name": rname}
+        last_err = f"size mismatch: local={local_size}, remote={remote_size} (attempt {attempt})"
+        try: d.shell(f'rm -f "{rpath}"')
+        except Exception: pass
+        time.sleep(2)
+    return {"ok": False, "error": f"[push_cover] {last_err}"}
+
+
+def _ext_from_image(local_path: str) -> str:
+    """Визначити розширення для cover-картинки за сигнатурою (fallback на .jpg)."""
+    try:
+        with open(local_path, 'rb') as fh:
+            head = fh.read(4)
+        if head[:3] == b'\xff\xd8\xff':
+            return '.jpg'
+        if head[:4] == b'\x89PNG':
+            return '.png'
+        if head[:3] == b'GIF':
+            return '.gif'
+        if head[:4] == b'RIFF':
+            return '.webp'
+    except Exception:
+        pass
+    return '.jpg'
+
+
+def _wait_cover_indexed(d, remote_name: str, timeout_s: int = 20) -> bool:
+    """Чекати поки MediaStore проіндексує пушнуту cover-картинку.
+
+    Best-effort: cover — це фото, IG cover-галерея часто підхоплює з файлової
+    системи навіть без повної індексації. Тут не падаємо жорстко (на відміну
+    від відео, де чужий файл у галереї = критична помилка).
+    """
+    try:
+        d.shell(f'am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE '
+                f'-d file://{REMOTE_DIR}/{remote_name}')
+    except Exception:
+        pass
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            out = d.shell(f'content query --uri content://media/external/images/media '
+                          f'--projection _display_name --where "_display_name=\'{remote_name}\'"').output
+            if remote_name in out:
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
+
+
+def _set_reel_cover(d, remote_cover_path: str, log=None) -> bool:
+    """Встановити кастомну обкладинку Reels на caption screen.
+
+    Ланцюг (підтверджено живим дампом на Mi MIX, 2026-09-21):
+      1. caption screen: кликабельна обкладинка `clip_thumbnail_layout` (Edit cover)
+      2. діалог: кнопка "Add from camera roll" = resource `add_from_gallery`
+      3. cover-галерея показує ТІЛЬКИ фото; наш пушнутий прев'ю = найновіша
+         картинка = перший item `gallery_image` [0].
+
+    Повертає True якщо обкладинка встановлена.
+    Не кидає — вертає False при будь-якій невдачі (дефолтний cover ок).
+    """
+    def _l(msg):
+        if log:
+            try: log(msg)
+            except Exception: pass
+        print(f"[post-v2] {msg}", flush=True)
+
+    # 1. Тап по обкладинці (Edit cover)
+    thumb = d(resourceId=f"{IG_PKG}:id/clip_thumbnail_layout")
+    if thumb.exists:
+        thumb.click()
+        _l("set_cover: tapped clip_thumbnail_layout (Edit cover)")
+        human_sleep(1.2, 2.0)
+    else:
+        _l("set_cover: clip_thumbnail_layout not found")
+        return False
+
+    # 2. Тап "Add from camera roll"
+    add_btn = d(resourceId=f"{IG_PKG}:id/add_from_gallery")
+    if not add_btn.exists:
+        add_btn = d(contentDesc="Add from camera roll")
+    if add_btn.exists:
+        add_btn.click()
+        _l("set_cover: tapped add_from_gallery")
+        human_sleep(1.5, 2.5)
+    else:
+        _l("set_cover: add_from_gallery not found")
+        d.press("back"); time.sleep(0.5)
+        return False
+
+    # 3. У cover-галереї (тільки фото) обрати найновішу картинку = [0]
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            items = d(resourceId=f"{IG_PKG}:id/gallery_image")
+            if items.exists and items.count > 0:
+                items[0].click()
+                _l("set_cover: selected first image from camera-roll gallery")
+                time.sleep(1.2)
+                # Після вибору картинки IG відкриває екран "Edit cover"
+                # (прев'ю обраної картинки + кнопки Done / Add from camera roll).
+                # Тиснемо "Done" (action_bar_button_text), щоб підтвердити
+                # обкладинку і повернутись на caption screen.
+                done = d(resourceId=f"{IG_PKG}:id/action_bar_button_text")
+                if done.exists:
+                    done.click()
+                    _l("set_cover: tapped Done to confirm cover")
+                    time.sleep(1.5)
+                else:
+                    # fallback: text=Done
+                    done2 = d(text="Done")
+                    if done2.exists:
+                        done2.click()
+                        _l("set_cover: tapped Done (text fallback)")
+                        time.sleep(1.5)
+                return True
+        except Exception:
+            pass
+        time.sleep(1.0)
+    _l("set_cover: gallery_image not found in cover picker")
+    d.press("back"); time.sleep(0.5)
+    return False
 
 
 def _read_active_username_via_profile(d) -> str | None:
@@ -549,6 +732,7 @@ def post_reel_v2(
     dry_run: bool = False,
     db_path: str | None = None,   # шлях до SQLite для direct write (Варіант Б)
     expected_username: str | None = None,  # очікуваний IG username для verification
+    cover_path: str | None = None,  # прев'ю-картинка (jpg/png) для обкладинки Reels
 ) -> dict:
     """Post Instagram Reel using human-like Android automation.
 
@@ -609,7 +793,25 @@ def post_reel_v2(
         except Exception as e:
             log(f"disguise warn: {e}")
 
-        # ── 2. Push video з verify ──────────────────────────────
+        # ── 2. Push preview (cover image) ПЕРЕД відео ────────────
+        # Порядок важливий: прев'ю ПЕРШОЮ, відео ОСТАННІМ. Тоді в галереї
+        # відео буде крайнім (береться [0] для select_video), а прев'ю —
+        # найновішою КАРТИНКОЮ (у cover-галереї показуються тільки фото,
+        # тож наша прев'ю буде [0]).
+        remote_cover_path = None
+        if cover_path and os.path.isfile(cover_path):
+            current_step = "push_cover"
+            log(f"pushing cover ({os.path.getsize(cover_path):,} bytes)...")
+            cover_r = _push_cover_verified(d, cover_path, post_id=post_id)
+            if not cover_r["ok"]:
+                # Прев'ю не критичне — логуємо попередження, але не падаємо:
+                # пост можна опублікувати і з дефолтним cover (перший кадр).
+                log(f"WARNING: cover push failed (продовжуємо без кастомної обкладинки): {cover_r.get('error')}")
+            else:
+                remote_cover_path = cover_r["remote_path"]
+                log(f"cover pushed to {remote_cover_path}")
+
+        # ── 2b. Push video з verify ──────────────────────────────
         current_step = "push_video"
         log(f"pushing video ({os.path.getsize(video_path):,} bytes)...")
         push_r = _push_video_verified(d, video_path, post_id=post_id)
@@ -853,6 +1055,25 @@ def post_reel_v2(
             human_sleep(1.5, 2.5)
         else:
             log("no second Next (caption screen already)")
+
+        # ── 8a. Спершу ставимо кастомну обкладинку (якщо є прев'ю) ──
+        # Це робимо ДО введення caption, бо на caption screen зверху на
+        # силуеті відео є "Edit cover" (clip_thumbnail_layout) — коли фокус
+        # ще не на полі опису, обкладинка в accessibility-дереві видима.
+        # Тап → "Add from camera roll" (add_from_gallery) → галерея ТІЛЬКИ
+        # фото, наш пушнутий прев'ю = найновіша картинка = item [0].
+        # Робимо і в dry_run (щоб юзер побачив cover), Share не тиснемо.
+        if remote_cover_path:
+            current_step = "set_cover"
+            try:
+                cover_set = _set_reel_cover(d, remote_cover_path, log)
+                if cover_set:
+                    log("cover set from gallery (first image)")
+                    human_sleep(1.0, 2.0)
+                else:
+                    log("cover set fail — продовжуємо з дефолтним cover")
+            except Exception as e:
+                log(f"set_cover soft-fail: {type(e).__name__}: {e}")
 
         # ── 8. Ввести caption ──────────────────────────────────
         current_step = "enter_caption"

@@ -1,0 +1,508 @@
+1|1|"""Warmup v2 orchestrator — головний цикл mixed-action IG warmup.
+2|2|
+3|3|Зшиває разом:
+4|4|  - state_detector (де ми в IG)
+5|5|  - ai_relevance   (чи релевантний контент)
+6|6|  - policy         (яку дію обирати)
+7|7|  - actions        (виконання реальних жестів)
+8|8|
+9|9|Головна функція: run_warmup_session() — drop-in заміна для scroll_reels().
+10|10|API сумісний: приймає серіал/тривалість/налаштування, повертає dict зі статистикою.
+11|11|"""
+12|12|
+13|13|from __future__ import annotations
+14|14|
+15|15|import os
+16|16|import random
+17|17|import sys
+18|18|import time
+19|19|
+20|20|# Додаємо python/ у sys.path для імпортів з android_poster
+21|21|_HERE = os.path.dirname(os.path.abspath(__file__))
+22|22|_PY_DIR = os.path.dirname(_HERE)
+23|23|if _PY_DIR not in sys.path:
+24|24|    sys.path.insert(0, _PY_DIR)
+25|25|
+26|26|from .state_detector import detect_screen, ScreenState
+27|27|from .policy import (
+28|28|    SessionBudget, SessionMemory, PlannedAction, next_action,
+29|29|)
+30|30|from .actions import execute, ExecutionResult
+31|31|from .ai_relevance import (
+32|32|    NicheProfile, niche_from_config,
+33|33|    ai_decide_reel_text, ai_decide_reel_vision,
+34|34|)
+35|35|
+36|36|
+37|37|def run_warmup_session(
+38|38|    serial: str | None = None,
+39|39|    duration_seconds: int = 360,
+40|40|    niche: NicheProfile | None = None,
+41|41|    proxy: str | None = None,
+42|42|    use_ai: bool = True,
+43|43|    max_likes: int | None = None,      # якщо None — 5% від очікуваних reels
+44|44|    max_saves: int | None = None,
+45|45|    log_fn=None,                        # optional: callback для логів
+46|46|    session_id: int | None = None,     # id у БД для прямого запису результату
+47|47|    db_path: str | None = None,        # шлях до SQLite (з Electron)
+48|48|    engine: str = 'v2',                 # для db.engine field
+49|49|    expected_username: str | None = None,  # активний IG акаунт має бути = цим
+50|50|) -> dict:
+51|51|    """Запустити повну warmup сесію з mixed actions.
+52|52|
+53|53|    Args:
+54|54|        serial:            ADB host (None = default)
+55|55|        duration_seconds:  тривалість
+56|56|        niche:             налаштована ніша (NicheProfile або None щоб не використовувати AI)
+57|57|        proxy:             "host:port:user:pass" або None
+58|58|        use_ai:            вмикає AI relevance (якщо niche заповнено)
+59|59|        max_likes/saves:   жорсткі ліміти (None → розраховуємо: 5%/2% від reels)
+60|60|        log_fn:            callable(str) для логів
+61|61|
+62|62|    Returns:
+63|63|        {
+64|64|            "ok": True,
+65|65|            "reels_watched": int,
+66|66|            "likes_given": int,
+67|67|            "saves_given": int,
+68|68|            "stories_watched": int,
+69|69|            "ai_decisions": list[dict],
+70|70|            "duration": float,
+71|71|            "time_in_tab": {...},
+72|72|            "tab_switches": int,
+73|73|            "actions": list[str],   # послідовність дій для debug
+74|74|            "error": str | None,
+75|75|        }
+76|76|    """
+77|77|    import uiautomator2 as u2
+78|78|    from android_poster import _set_proxy, _set_uk_disguise, read_reel_text
+79|79|
+80|80|    def log(msg: str) -> None:
+81|81|        if log_fn:
+82|82|            try: log_fn(msg)
+83|83|            except Exception: pass
+84|84|        print(f"[v2] {msg}", flush=True)
+85|85|
+86|86|    # ── 0. Connect ──────────────────────────────────────────────
+87|87|    try:
+88|88|        d = u2.connect(serial) if serial else u2.connect()
+89|89|    except Exception as e:
+90|90|        return {"ok": False, "error": f"Device connect failed: {e}"}
+91|91|
+92|92|    log(f"Session start: {duration_seconds}s, AI={use_ai}, "
+93|93|        f"niche={'configured' if (niche and niche.is_configured()) else 'NONE'}")
+94|94|
+95|95|    # ── 1. Proxy & disguise ─────────────────────────────────────
+96|96|    proxy_set = False
+97|97|    orig_disguise = None
+98|98|
+99|99|    # Estimate очікуваних reels для лімітів (для 6 хв = ~50 reels)
+100|100|    # Cred 20-25 reels/хв з природніми паузами
+101|101|    expected_reels = max(1, int(duration_seconds / 12))
+102|102|    if max_likes is None:
+103|103|        max_likes = max(1, int(expected_reels * 0.05))   # 5%
+104|104|    if max_saves is None:
+105|105|        max_saves = max(1, int(expected_reels * 0.02))   # 2%
+106|106|
+107|107|    budget = SessionBudget(
+108|108|        total_seconds=float(duration_seconds),
+109|109|        max_likes=max_likes,
+110|110|        max_saves=max_saves,
+111|111|    )
+112|112|    memory = SessionMemory()
+113|113|
+114|114|    # Трекер: коли востаннє викликали AI для reel (за action counter'ом)
+115|115|    last_ai_reel_at_action = -999
+116|116|    # Прапорці для поточного reel
+117|117|    current_reel_liked = False
+118|118|    current_reel_saved = False
+119|119|    # Ліміт vision викликів (дорогий fallback) — max ~30% від reels
+120|120|    max_vision_calls = max(3, int(duration_seconds / 60 * 3))  # ~3 на 60с
+121|121|    vision_calls_used = 0
+122|122|
+123|123|    actions_log: list[str] = []
+124|124|    ai_decisions: list[dict] = []
+125|125|    error: str | None = None
+126|126|    last_tab_time = time.time()
+127|127|
+128|128|    try:
+129|129|        if proxy:
+130|130|            parts = proxy.strip().split(":")
+131|131|            if len(parts) >= 2:
+132|132|                try:
+133|133|                    _set_proxy(d, parts[0], int(parts[1]),
+134|134|                               parts[2] if len(parts) > 2 else "",
+135|135|                               parts[3] if len(parts) > 3 else "")
+136|136|                    proxy_set = True
+137|137|                    log("proxy set OK")
+138|138|                except Exception as e:
+139|139|                    return {"ok": False, "error": f"Proxy setup failed: {e}"}
+140|140|
+141|141|        try:
+142|142|            orig_disguise = _set_uk_disguise(d)
+143|143|        except Exception as e:
+144|144|            log(f"disguise warn: {e}")
+145|145|
+146|146|        # ── 2. Open IG ──────────────────────────────────────────
+147|147|        # Wake + unlock (повний цикл: KEYCODE_WAKEUP + перевірка Display Power +
+148|148|        # swipe up для dismissing lockscreen + dismiss-keyguard).
+149|149|        # Простий KEYCODE_WAKEUP не дає dismiss lockscreen → IG не стартує.
+150|150|        try:
+151|151|            from android_poster import _wake_and_unlock
+152|152|            d.shell("svc power stayon true")
+153|153|            _wake_and_unlock(d)
+154|154|            # Підтверджуємо що екран увімкнувся; до 3 спроб
+155|155|            for _ in range(3):
+156|156|                power_state = d.shell("dumpsys power | grep 'Display Power'").output
+157|157|                if "state=ON" in power_state:
+158|158|                    break
+159|159|                d.shell("input keyevent KEYCODE_WAKEUP")
+160|160|                time.sleep(1.0)
+161|161|                d.shell("wm dismiss-keyguard")
+162|162|                time.sleep(0.5)
+163|163|        except Exception as e:
+164|164|            log(f"wake_and_unlock warn: {e}")
+165|165|
+166|166|        # Закриваємо і знову відкриваємо IG — чистий старт
+167|167|        try:
+168|168|            from android_poster import IG_PKG
+169|169|            d.app_stop(IG_PKG)
+170|170|            time.sleep(0.8)
+171|171|            d.app_start(IG_PKG, use_monkey=True)
+172|172|        except Exception as e:
+173|173|            log(f"app_start warn: {e}")
+174|174|
+175|175|        time.sleep(6.0)  # splash + feed load (збільшено з 3.5с: на слабких телефонах
+                        # профіль/feed не встигали прогрузитись, даючи фальшивий
+                        # "could not read active IG account")
+176|176|
+177|177|        # ── 2.5. Ніжна перевірка активного акаунта (2026-09-20) ────────
+178|178|        # Перед прогрівом переконуємось що активний IG акаунт = той, для якого
+179|179|        # заплановано прогрів. Profile tab (1 тап, без світчера) → читаємо
+180|180|        # username. Якщо не той — перемикаємось через світчер. Якщо потрібного
+181|181|        # немає на пристрої — помилка, щоб не гріти чужий акаунт.
+182|182|                        if expected_username:
+            try:
+                from android_poster import _ensure_ig_account
+                log(f"STRICT CHECK: Target account is @{expected_username}")
+                ok_acc, acc_msg = _ensure_ig_account(d, expected_username)
+                log(f"STRICT CHECK RESULT: {acc_msg}")
+                if not ok_acc:
+                    log(f"CRITICAL ERROR: Account mismatch! Expected @{expected_username}, but {acc_msg}. Aborting to prevent wrong account warmup.")
+                    return {"ok": False, "error": f"Account mismatch: {acc_msg}"}
+            except Exception as e:
+                log(f"STRICT CHECK EXCEPTION: {e}")
+                return {"ok": False, "error": f"Account check failed: {e}"}
+
+            # GUARANTEE: Return to Home Feed after account check/switch.
+            try:
+                from android_poster import IG_PKG
+                home_tab = d(resourceId=f"{IG_PKG}:id/feed_tab")
+                if home_tab.exists:
+                    home_tab.click()
+                    time.sleep(2.0)
+                    log("Returned to home feed for session start")
+            except Exception as e:
+                log(f"Return home warn: {e}")
+
+192|
+193|            # КРИТИЧНО: Після перевірки/перемикання акаунта ми можемо бути на екрані Профілю.
+194|            # Оркестратор очікує старт з HOME_FEED. Повертаємось на головну.
+195|            try:
+196|                from android_poster import IG_PKG
+197|                home_tab = d(resourceId=f"{IG_PKG}:id/feed_tab")
+198|                if home_tab.exists:
+199|                    home_tab.click()
+200|                    time.sleep(1.5)
+201|                    log("returned to home feed after account check")
+202|            except Exception as e:
+203|                log(f"return home warn: {e}")
+204|
+205|192|
+206|193|        # ── 3. Main loop ────────────────────────────────────────
+207|194|        last_tab_time = time.time()
+208|195|        recovery_attempts = 0       # лічильник recover_back/open_instagram
+209|196|        last_productive_action_at = time.time()  # час останнього product-у action
+210|197|
+211|198|        while not budget.is_done():
+212|199|            now = time.time()
+213|200|
+214|201|            # 3.1 Detect state
+215|202|            state = detect_screen(d)
+216|203|
+217|204|            # 3.0 DEAD LOOP DETECTION — якщо >60s без жодної продуктивної дії
+218|205|            # (тільки recovery/wait) — виходимо з error
+219|206|            if now - last_productive_action_at > 60:
+220|207|                log(f"DEAD LOOP detected: {recovery_attempts} recovery attempts, "
+221|208|                    f"no productive action for {now - last_productive_action_at:.0f}s")
+222|209|                error = f"dead loop (recovery {recovery_attempts}x)"
+223|210|                break
+224|211|
+225|212|            # 3.2 Track time in current tab
+226|213|            cur_tab = _tab_name(state)
+227|214|            if cur_tab:
+228|215|                budget.time_in_tab[cur_tab] = budget.time_in_tab.get(cur_tab, 0) + (now - last_tab_time)
+229|216|            last_tab_time = now
+230|217|
+231|218|            # 3.3 AI evaluation на новому reel
+232|219|            if (use_ai and state.type == 'REELS_FEED'
+233|220|                    and niche and niche.is_configured()
+234|221|                    and memory.action_counter - last_ai_reel_at_action >= 1
+235|222|                    and memory.last_ai_decision is None):
+236|223|                # Новий reel — оцінюємо (text first, vision як fallback)
+237|224|                try:
+238|225|                    # Даємо UI час завантажити TextView після scroll
+239|226|                    time.sleep(0.7)
+240|227|                    reel_text = read_reel_text(d, min_len=0) or ""
+241|228|                    decision = None
+242|229|
+243|230|                    if len(reel_text.strip()) >= 10:
+244|231|                        # Text-only — швидко
+245|232|                        decision = ai_decide_reel_text(reel_text, niche, timeout=15)
+246|233|                        log(f"AI [text] → {decision['action']}: {decision.get('reason','')[:80]}")
+247|234|                    elif vision_calls_used < max_vision_calls:
+248|235|                        # Vision fallback — робимо screenshot через PIL
+249|236|                        try:
+250|237|                            png = _grab_screenshot_bytes(d)
+251|238|                            if png and len(png) > 1000:
+252|239|                                decision = ai_decide_reel_vision(png, niche, timeout=25)
+253|240|                                vision_calls_used += 1
+254|241|                                log(f"AI [vision #{vision_calls_used}] → {decision['action']}: {decision.get('reason','')[:80]}")
+255|242|                            else:
+256|243|                                log(f"AI vision skip: screenshot empty ({len(png) if png else 0}b)")
+257|244|                        except Exception as ve:
+258|245|                            log(f"AI vision error: {ve}")
+259|246|
+260|247|                    if decision:
+261|248|                        # Downgrade якщо бюджет вичерпано — щоб у логах відображалось
+262|249|                        # реальне поведінка, не "phantom" save decisions.
+263|250|                        if decision['action'] == 'save' and budget.saves_given >= budget.max_saves:
+264|251|                            if budget.likes_given < budget.max_likes:
+265|252|                                decision['downgraded_from'] = 'save'
+266|253|                                decision['downgrade_reason'] = f'save limit reached ({budget.max_saves})'
+267|254|                                decision['action'] = 'like'
+268|255|                            else:
+269|256|                                decision['downgraded_from'] = 'save'
+270|257|                                decision['downgrade_reason'] = f'save limit reached, likes also at limit'
+271|258|                                decision['action'] = 'skip'
+272|259|                            log(f"  [downgrade] save → {decision['action']}: {decision['downgrade_reason']}")
+273|260|                        elif decision['action'] == 'like' and budget.likes_given >= budget.max_likes:
+274|261|                            decision['downgraded_from'] = 'like'
+275|262|                            decision['downgrade_reason'] = f'likes limit reached ({budget.max_likes})'
+276|263|                            decision['action'] = 'skip'
+277|264|                            log(f"  [downgrade] like → skip: {decision['downgrade_reason']}")
+278|265|                        memory.last_ai_decision = decision['action']
+279|266|                        ai_decisions.append(decision)
+280|267|                    else:
+281|268|                        memory.last_ai_decision = 'skip'
+282|269|                        log(f"AI skip: no signal (text={len(reel_text)}, vision_used={vision_calls_used}/{max_vision_calls})")
+283|270|
+284|271|                    last_ai_reel_at_action = memory.action_counter
+285|272|                except Exception as e:
+286|273|                    log(f"AI error: {e} — skip")
+287|274|                    memory.last_ai_decision = 'skip'
+288|275|
+289|276|            # 3.4 Policy → обираємо наступну дію
+290|277|            action = next_action(state, budget, memory)
+291|278|
+292|279|            if action.kind == 'end_session':
+293|280|                log(f"end_session: {action.reason}")
+294|281|                break
+295|282|
+296|283|            # 3.5 Execute
+297|284|            log(f"{state.type:<18} → {action.kind:<24} | {action.reason[:50]}")
+298|285|            result = execute(d, action, state)
+299|286|            actions_log.append(action.kind)
+300|287|
+301|288|            if not result.ok:
+302|289|                log(f"  FAIL: {result.error[:80]}")
+303|290|
+304|291|            # 3.6 Update budget/memory з side_effects
+305|292|            fx = result.side_effects or {}
+306|293|            if fx.get('liked') is True:
+307|294|                budget.likes_given += 1
+308|295|                memory.last_like_at = time.time()
+309|296|                current_reel_liked = True
+310|297|            if fx.get('saved') is True:
+311|298|                budget.saves_given += 1
+312|299|                memory.last_save_at = time.time()
+313|300|                current_reel_saved = True
+314|301|            if 'reel' in action.kind and 'scroll' in action.kind:
+315|302|                budget.reels_watched += 1
+316|303|            if fx.get('peeked') is True:
+317|304|                budget.profile_peeks += 1
+318|305|            if action.kind.startswith('goto_') or action.kind == 'open_instagram':
+319|306|                budget.tab_switches += 1
+320|307|            if fx.get('watched') is True and state.type == 'STORY_VIEWER':
+321|308|                budget.stories_watched += 1
+322|309|
+323|310|            # 3.7 Reset AI state коли переходимо на НАСТУПНИЙ reel
+324|311|            if action.kind == 'reel_scroll_next':
+325|312|                memory.last_ai_decision = None
+326|313|                current_reel_liked = False
+327|314|                current_reel_saved = False
+328|315|
+329|316|            # 3.75 Трекер recovery/productive actions (для dead loop detection)
+330|317|            recovery_kinds = {'wait', 'wake_and_unlock', 'recover_back',
+331|318|                               'close_modal', 'open_instagram', 'skip_ad'}
+332|319|            if action.kind in recovery_kinds:
+333|320|                recovery_attempts += 1
+334|321|                # Якщо > 6 recovery спроб підряд — уже явно щось не так
+335|322|                if recovery_attempts > 6:
+336|323|                    log(f"EARLY EXIT: {recovery_attempts} recovery attempts in a row")
+337|324|                    error = f"too many recovery attempts ({recovery_attempts})"
+338|325|                    break
+339|326|                # Добавляємо довшу паузу після кожного recovery щоб не дати циклу "пальнути"
+340|327|                time.sleep(2.0)
+341|328|            else:
+342|329|                recovery_attempts = 0
+343|330|                last_productive_action_at = time.time()
+344|331|
+345|332|            # 3.8 Записуємо в memory (впливає на consecutive_scrolls, тощо)
+346|333|            memory.record(action.kind)
+347|334|
+348|335|            # 3.9 Оновлюємо memory прапорці
+349|336|            memory.already_liked_this_reel = current_reel_liked
+350|337|            memory.already_saved_this_reel = current_reel_saved
+351|338|
+352|339|        # ── 4. Cleanup ─────────────────────────────────────────
+353|340|        log(f"cleanup: reels={budget.reels_watched}, likes={budget.likes_given}, "
+354|341|            f"saves={budget.saves_given}, ai_calls={len(ai_decisions)}")
+355|342|
+356|343|        # Home → закриваємо IG у фон (як реальні юзери)
+357|344|        try:
+358|345|            d.press("home")
+359|346|        except Exception: pass
+360|347|
+361|348|    except KeyboardInterrupt:
+362|349|        error = "interrupted"
+363|350|    except Exception as e:
+364|351|        error = f"{type(e).__name__}: {e}"
+365|352|        log(f"SESSION FAIL: {error}")
+366|353|    finally:
+367|354|        # Revert disguise/proxy
+368|355|        if orig_disguise is not None:
+369|356|            try:
+370|357|                d.shell(f"settings put global device_name '{orig_disguise}'")
+371|358|            except Exception: pass
+372|359|        if proxy_set:
+373|360|            try:
+374|361|                d.shell("settings put global http_proxy :0")
+375|362|            except Exception: pass
+376|363|
+377|364|    # Aggregate AI costs
+378|365|    total_in = sum(d.get('tokens_in', 0) for d in ai_decisions)
+379|366|    total_out = sum(d.get('tokens_out', 0) for d in ai_decisions)
+380|367|    total_cache_read = sum(d.get('cache_read', 0) for d in ai_decisions)
+381|368|    total_cost = sum(d.get('cost_usd', 0.0) for d in ai_decisions)
+382|369|
+383|370|    result = {
+384|371|        "ok": error is None,
+385|372|        "error": error,
+386|373|        "reels_watched": budget.reels_watched,
+387|374|        "likes_given": budget.likes_given,
+388|375|        "saves_given": budget.saves_given,
+389|376|        "stories_watched": budget.stories_watched,
+390|377|        "profile_peeks": budget.profile_peeks,
+391|378|        "tab_switches": budget.tab_switches,
+392|379|        "time_in_tab": dict(budget.time_in_tab),
+393|380|        "ai_decisions": ai_decisions,
+394|381|        "actions": actions_log,
+395|382|        "duration": budget.elapsed(),
+396|383|        "ai_stats": {
+397|384|            "calls": len(ai_decisions),
+398|385|            "input_tokens": total_in,
+399|386|            "output_tokens": total_out,
+400|387|            "cache_read_tokens": total_cache_read,
+401|388|            "total_tokens": total_in + total_out + total_cache_read,
+402|389|            "cost_usd_if_api": round(total_cost, 6),
+403|390|        },
+404|391|    }
+405|392|
+406|393|    # ── Direct DB write (Варіант Б): Python сам пише результат у SQLite ──
+407|394|    # Це гарантує збереження даних навіть якщо Electron crashed/restarted.
+408|395|    if session_id and db_path:
+409|396|        try:
+410|397|            from datetime import datetime, timezone
+411|398|            from db_helper import update_warmup_session
+412|399|
+413|400|            db_data = {
+414|401|                'status': 'done' if result['ok'] else 'failed',
+415|402|                'finished_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+416|403|                'reels_watched': result['reels_watched'],
+417|404|                'likes_given': result['likes_given'],
+418|405|                'saves_given': result['saves_given'],
+419|406|                'error': None if result['ok'] else result.get('error', 'unknown'),
+420|407|                'ai_decisions': result['ai_decisions'] if result['ai_decisions'] else None,
+421|408|                'ai_input_tokens': total_in,
+422|409|                'ai_output_tokens': total_out,
+423|410|                'ai_cache_read_tokens': total_cache_read,
+424|411|                'ai_cost_usd': round(total_cost, 6),
+425|412|                'ai_calls': len(ai_decisions),
+426|413|                'engine': engine,
+427|414|            }
+428|415|            db_r = update_warmup_session(db_path, session_id, db_data)
+429|416|            if db_r.get('ok'):
+430|417|                log(f"DB write OK: session #{session_id} → {db_data['status']}")
+431|418|                result['db_written'] = True
+432|419|            else:
+433|420|                log(f"DB write FAIL: {db_r.get('error')}")
+434|421|                result['db_written'] = False
+435|422|                result['db_error'] = db_r.get('error')
+436|423|        except Exception as e:
+437|424|            log(f"DB write exception: {e}")
+438|425|            result['db_written'] = False
+439|426|            result['db_error'] = str(e)
+440|427|
+441|428|    return result
+442|429|
+443|430|
+444|431|def _grab_screenshot_bytes(d) -> bytes | None:
+445|432|    """Взяти скріншот пристрою як PNG bytes.
+446|433|
+447|434|    uiautomator2 за замовчуванням повертає PIL Image. Конвертуємо у bytes.
+448|435|    Різні версії u2 мають різні сигнатури — намагаємось кілька варіантів.
+449|436|    """
+450|437|    import io
+451|438|
+452|439|    # Спроба 1: default (повертає PIL Image)
+453|440|    try:
+454|441|        img = d.screenshot()
+455|442|        if img is None:
+456|443|            return None
+457|444|        # PIL Image → PNG bytes
+458|445|        if hasattr(img, 'save'):
+459|446|            buf = io.BytesIO()
+460|447|            img.save(buf, format='PNG')
+461|448|            return buf.getvalue()
+462|449|        # Уже bytes?
+463|450|        if isinstance(img, (bytes, bytearray)):
+464|451|            return bytes(img)
+465|452|    except Exception:
+466|453|        pass
+467|454|
+468|455|    # Спроба 2: через adb shell screencap
+469|456|    try:
+470|457|        import tempfile, os
+471|458|        tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+472|459|        tmp.close()
+473|460|        try:
+474|461|            d.screenshot(tmp.name)
+475|462|            with open(tmp.name, 'rb') as f:
+476|463|                return f.read()
+477|464|        finally:
+478|465|            try: os.unlink(tmp.name)
+479|466|            except Exception: pass
+480|467|    except Exception:
+481|468|        return None
+482|469|
+483|470|
+484|471|def _tab_name(state: ScreenState) -> str | None:
+485|472|    m = {
+486|473|        'HOME_FEED': 'home', 'REELS_FEED': 'reels',
+487|474|        'STORY_VIEWER': 'stories', 'EXPLORE': 'explore',
+488|475|        'PROFILE_OWN': 'profile', 'PROFILE_OTHER': 'profile',
+489|476|    }
+490|477|    return m.get(state.type)
+491|478|
+492|
